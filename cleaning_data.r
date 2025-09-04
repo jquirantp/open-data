@@ -40,9 +40,11 @@ ev3 = ev2[, .(id,index,period,timestamp,minute, second, type.id , type.name,poss
 ev3$fn = fn
 return(ev3)
 }
+
+
 all_events = rbindlist(lapply(events$fn,get_events),fill=T)
 all_events$match_id = events$match_id[match(all_events$fn,events$fn)]
-# fwrite(all_events, file = "all_events.csv")
+fwrite(all_events, file = "all_events.csv")
 
 # --- From now on, just load the saved CSV ---
 #all_events <- fread("all_events.csv")
@@ -58,7 +60,7 @@ all_events$match_id = events$match_id[match(all_events$fn,events$fn)]
 events_all_paths = list.files(path = 'data/events', full.names = T, recursive = T)
 
 # --- KEY CHANGE: Select only the first 3 files to create a small sample ---
-events_subset_paths <- head(events_all_paths, 30)
+events_subset_paths <- head(events_all_paths, 1)
 
 print(paste("Loading a subset of", length(events_subset_paths), "files..."))
 
@@ -97,4 +99,7 @@ subset_data %>%
   select(where(~ !all(is.na(.) | purrr::map_lgl(., ~ length(.) == 0))))
 
 colnames(subset_data)
-Bad Behaviour
+
+
+
+
