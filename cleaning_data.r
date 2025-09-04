@@ -1,8 +1,7 @@
 library(data.table)
 library(jsonlite)
 library(dplyr)
-library(data.table)
-library(jsonlite)
+
 
 matches = list.files(path = 'data/matches',full.names = T,recursive = T)
 
@@ -103,3 +102,54 @@ colnames(subset_data)
 
 
 
+
+
+library(data.table)
+library(jsonlite)
+
+matches = list.files(path = 'data/matches',full.names = T,recursive = T)
+
+z = (lapply(matches,function(fn){
+  
+  x0 = read_json(fn,simplifyVector = T);
+  x0 = as.data.table(x0)
+  x0;
+}))
+z = rbindlist(z,fill = T)
+z = z[!duplicated(z$match_id),]
+table(z$competition.competition_name)
+events = list.files(path = 'data/events',full.names = T,recursive = T)
+events = data.frame(fn = events)
+events$match_id = unlist(lapply(events$fn,function(ww){
+  qq=strsplit(ww,split = '/',fixed=T)[[1]]
+  rev(qq)[1]
+}))
+events$match_id = gsub(events$match_id,pattern='.json',replacement='',fixed=T)
+m0 = z[z$competition.competition_name %in% c(
+  '1. Bundesliga',
+  'Premier League',
+  'Serie A',
+  'La Liga',
+  'Ligue 1'
+)]
+m0$event_present = m0$match_id %in% events$match_id
+events = events[events$match_id %in% m0$match_id,]
+get_events=function(fn){
+# we want xg , shots, corners, bookings
+ev = read_json(fn,simplifyVector = T);
+ev = as.data.table(ev)
+ev2 = ev[(ev$pass.type.name == 'Corner') | (ev$type.name=='Shot') | (ev$type.name=='Foul Committed') | ev$type.name %in% c('Half End','Half Start'),]
+ev3 = ev2[, .(id,index,period,timestamp,minute, second, type.id , type.name,possession_team.name,play_pattern.name,team.id,team.name,pass.type.name,shot.outcome.name,shot.statsbomb_xg)]
+ev3$fn = fn
+return(ev3)
+}
+
+
+
+
+
+
+
+
+all_events = rbindlist(lapply(events$fn,get_events),fill=T)
+all_events$match_id = events$match_id[match(all_events$fn,events$fn)]
