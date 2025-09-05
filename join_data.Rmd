@@ -33,25 +33,48 @@ if (length(missing_ids) == 0) {
 matches_info_all_events <- cleaned_matches_info[match_id %in% event_match_ids]
 
 
-unique(matches_info_all_events$competition.competition_name)
-
 ##########################################################################################
-############################## SPANISH LEAGUE #############################################
+############################## La Liga #############################################
 ##########################################################################################
 
 laliga_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "La Liga", ]
 
-unique(laliga_events$season.season_name)
+## 1. Find all "laliga" CSV files in the folder
+file_paths_laliga <- list.files(
+  path = "football_data_co",
+  pattern = "^laliga_.*\\.csv$",
+  full.names = TRUE
+)
+
+## 2. Read and combine all files (with the final fix)
+# Using fill = Inf is the most robust way to read inconsistent files.
+laliga_dataco <- rbindlist(
+  lapply(file_paths_laliga, fread, fill = Inf), # <-- The final fix is here
+  fill = TRUE,
+  idcol = "source_file"
+)
 
 
 ##########################################################################################
 ############################## Serie A#############################################
 ##########################################################################################
-
 seriea_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "Serie A", ]
 
-unique(seriea_events$season.season_name)
 
+## 1. Find all "seriea" CSV files in the folder
+file_paths_seriea <- list.files(
+  path = "football_data_co",
+  pattern = "^seriea_.*\\.csv$",
+  full.names = TRUE
+)
+
+## 2. Read and combine all files (with the final fix)
+# Using fill = Inf is the most robust way to read inconsistent files.
+seriea_dataco <- rbindlist(
+  lapply(file_paths_seriea, fread, fill = Inf), # <-- The final fix is here
+  fill = TRUE,
+  idcol = "source_file"
+)
 
 
 ##########################################################################################
@@ -60,7 +83,21 @@ unique(seriea_events$season.season_name)
 
 premier_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "Premier League", ]
 
-unique(premier_events$season.season_name)
+## 1. Find all "premier" CSV files in the folder
+file_paths_premier <- list.files(
+  path = "football_data_co",
+  pattern = "^premier_.*\\.csv$",
+  full.names = TRUE
+)
+
+## 2. Read and combine all files (with the final fix)
+# Using fill = Inf is the most robust way to read inconsistent files.
+premier_dataco <- rbindlist(
+  lapply(file_paths_premier, fread, fill = Inf), # <-- The final fix is here
+  fill = TRUE,
+  idcol = "source_file"
+)
+
 
 
 
@@ -68,7 +105,43 @@ unique(premier_events$season.season_name)
 ############################## Ligue 1 #############################################
 ##########################################################################################
 
-ligue1_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == " Ligue 1", ]
+ligue1_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "Ligue 1", ]
 
-unique(ligue1_events$season.season_name)
 
+
+
+
+## 1. Find all "ligue1" CSV files in the folder
+file_paths_ligue1 <- list.files(
+  path = "football_data_co",
+  pattern = "^ligue1_.*\\.csv$",
+  full.names = TRUE
+)
+
+## 2. Read and combine all files (with the final fix)
+# Using fill = Inf is the most robust way to read inconsistent files.
+ligue1_dataco <- rbindlist(
+  lapply(file_paths_ligue1, fread, fill = Inf), # <-- The final fix is here
+  fill = TRUE,
+  idcol = "source_file"
+)
+
+##########################################################################################
+############################## Bundesliga #############################################
+##########################################################################################
+
+bundesliga_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "1. Bundesliga", ]
+## 1. Find all "bundesliga" CSV files in the folder
+file_paths_bundesliga <- list.files(
+  path = "football_data_co",
+  pattern = "^bundesliga_.*\\.csv$",
+  full.names = TRUE
+)
+
+## 2. Read and combine all files (with the final fix)
+# Using fill = Inf is the most robust way to read inconsistent files.
+bundesliga_dataco <- rbindlist(
+  lapply(file_paths_bundesliga, fread, fill = Inf), # <-- The final fix is here
+  fill = TRUE,
+  idcol = "source_file"
+)
