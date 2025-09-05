@@ -1,5 +1,8 @@
-library(data.table)
 library(jsonlite)
+library(data.table)
+library(stringdist)
+library(stringi)
+library(lubridate) # Make sure to load the package
 
 all_events_v2 <- fread("all_events_v2.csv")
 cleaned_matches_info <- fread("cleaned_matches_info.csv")
@@ -32,7 +35,6 @@ if (length(missing_ids) == 0) {
 
 matches_info_all_events <- cleaned_matches_info[match_id %in% event_match_ids]
 
-
 ##########################################################################################
 ############################## La Liga #############################################
 ##########################################################################################
@@ -54,10 +56,107 @@ laliga_dataco <- rbindlist(
   idcol = "source_file"
 )
 
+#####################################    Add some Id
+
+
+laliga_dataco[, id := paste0("laliga", .I)]
+setcolorder(laliga_dataco, "id")
+
+
+######################################   Match the names
+dictionary_laliga <- data.table(
+  dataco_name = c(
+    "Ath Madrid", "Espanol", "Numancia", "Mallorca", "Osasuna", "Santander", 
+    "Sevilla", "Sociedad", "Zaragoza", "Valencia", "Ath Bilbao", "Barcelona", 
+    "Real Madrid", "Albacete", "Betis", "Getafe", "La Coruna", "Levante", 
+    "Malaga", "Villarreal", "Alaves", "Cadiz", "Celta", "Recreativo", 
+    "Gimnastic", "Murcia", "Almeria", "Valladolid", "Sp Gijon", "Tenerife", 
+    "Xerez", "Hercules", "Granada", "Vallecano", "Elche", "Eibar", 
+    "Cordoba", "Las Palmas", "Leganes", "Girona", "Huesca"
+  ),
+  events_name = c(
+    "Atlético Madrid", "Espanyol", "CD Numancia de Soria", "Mallorca", "Osasuna", "Racing Santander",
+    "Sevilla", "Real Sociedad", "Real Zaragoza", "Valencia", "Athletic Club", "Barcelona",
+    "Real Madrid", "Albacete", "Real Betis", "Getafe", "RC Deportivo La Coruña", "Levante UD",
+    "Málaga", "Villarreal", "Deportivo Alavés", "Cádiz", "Celta Vigo", "Recreativo Huelva",
+    "Gimnàstic Tarragona", "Real Murcia CF", "Almería", "Real Valladolid", "Sporting Gijón", "Tenerife",
+    "Xerez", "Hércules", "Granada", "Rayo Vallecano", "Elche", "Eibar",
+    "Córdoba CF", "Las Palmas", "Leganés", "Girona", "Huesca"
+  )
+)
+
+
+
+
+# --- Validation Script ---
+
+# 1. Get the unique names from your original data tables
+dataco_original_teams <- unique(laliga_dataco$HomeTeam)
+events_original_teams <- unique(laliga_events$home_team.home_team_name)
+
+# --- Check 1: Validate the 'dataco_name' column ---
+missing_in_dataco_col <- setdiff(dataco_original_teams, dictionary_laliga$dataco_name)
+
+if (length(missing_in_dataco_col) == 0) {
+  cat("✅ SUCCESS: All teams from 'laliga_dataco' are present in the dictionary's 'dataco_name' column.\n")
+} else {
+  cat("❌ WARNING: The following teams from 'laliga_dataco' are MISSING from the dictionary:\n")
+  print(missing_in_dataco_col)
+}
+
+# --- Check 2: Validate the 'events_name' column ---
+missing_in_events_col <- setdiff(events_original_teams, dictionary_laliga$events_name)
+
+if (length(missing_in_events_col) == 0) {
+  cat("\n✅ SUCCESS: All teams from 'laliga_events' are present in the dictionary's 'events_name' column.\n")
+} else {
+  cat("\n❌ WARNING: The following teams from 'laliga_events' are MISSING from the dictionary:\n")
+  print(missing_in_events_col)
+}
+
+#laliga_dataco in the same format (names of the teams and date) that allevents
+laliga_dataco_ready <- copy(laliga_dataco)
+laliga_dataco_ready[dictionary_laliga, on = .(HomeTeam = dataco_name), HomeTeam := i.events_name]
+laliga_dataco_ready[dictionary_laliga, on = .(AwayTeam = dataco_name), AwayTeam := i.events_name]
+laliga_dataco_ready[, date_standard := dmy(Date)]
+
+# --- 1. Prepare the 'laliga_events' Table for Joining ---
+# This step is still correct and necessary.
+events_to_join <- copy(laliga_events)
+events_to_join[, match_date_standard := as.Date(match_date)]
+
+
+# --- 2. Perform the Join (Corrected Direction) ---
+
+# To keep all rows from 'events_to_join', it must be the 'i' table (inside the brackets).
+laliga_events_dataco <- laliga_dataco_ready[events_to_join,
+  on = .(
+    HomeTeam == home_team.home_team_name,
+    AwayTeam == away_team.away_team_name,
+    date_standard == match_date_standard
+  ),
+  # For each row in events_to_join, create the two columns you want:
+  .(
+    dataco_id = x.id,         # 'id' from the left table (laliga_dataco_ready)
+    events_id = i.match_id      # 'match_id' from the right table (events_to_join)
+  )
+]
+
+#No matching events
+
+no_matching_laliga <- laliga_events_dataco[is.na(dataco_id), .(`events_id`)]
+unmatched_events_details <- laliga_events[match_id %in% no_matching_laliga$events_id]
+print(unmatched_events_details)
+
+
+
 
 ##########################################################################################
 ############################## Serie A#############################################
 ##########################################################################################
+#Note: From 2018/2019 the shots data for Serie A is showing an inconsistency with previous seasons, and looks to be related to the #inclusion of blocked shots. Users of the data should bear this in mind when collating several seasons together for analysis purposes.
+
+
 seriea_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "Serie A", ]
 
 
@@ -75,6 +174,111 @@ seriea_dataco <- rbindlist(
   fill = TRUE,
   idcol = "source_file"
 )
+
+#Add some Id
+seriea_dataco[, id := paste0("seriea", .I)]
+setcolorder(seriea_dataco, "id")
+
+
+
+######################################   Match the names
+unique(seriea_dataco$HomeTeam)
+
+unique(seriea_events$home_team.home_team_name)
+
+dictionary_seriea <- data.table(
+  dataco_name = c(
+    "Lazio", "Verona", "Empoli", "Fiorentina", "Frosinone", "Inter", 
+    "Juventus", "Palermo", "Sampdoria", "Sassuolo", "Bologna", "Milan", 
+    "Atalanta", "Carpi", "Chievo", "Genoa", "Napoli", "Roma", 
+    "Torino", "Udinese", ""
+  ),
+  events_name = c(
+    "Lazio", "Hellas Verona", "Empoli", "Fiorentina", "Frosinone", "Inter Milan",
+    "Juventus", "Palermo", "Sampdoria", "Sassuolo", "Bologna", "AC Milan",
+    "Atalanta", "Carpi", "Chievo", "Genoa", "Napoli", "AS Roma",
+    "Torino", "Udinese", NA
+  )
+)
+
+
+
+# --- Validation Script ---
+
+# 1. Get the unique names from your original data tables
+dataco_original_teams <- unique(seriea_dataco$HomeTeam)
+events_original_teams <- unique(seriea_events$home_team.home_team_name)
+
+# --- Check 1: Validate the 'dataco_name' column ---
+missing_in_dataco_col <- setdiff(dataco_original_teams, dictionary_seriea$dataco_name)
+
+if (length(missing_in_dataco_col) == 0) {
+  cat("✅ SUCCESS: All teams from 'seriea_dataco' are present in the dictionary's 'dataco_name' column.\n")
+} else {
+  cat("❌ WARNING: The following teams from 'seriea_dataco' are MISSING from the dictionary:\n")
+  print(missing_in_dataco_col)
+}
+
+# --- Check 2: Validate the 'events_name' column ---
+missing_in_events_col <- setdiff(events_original_teams, dictionary_seriea$events_name)
+
+if (length(missing_in_events_col) == 0) {
+  cat("\n✅ SUCCESS: All teams from 'seriea_events' are present in the dictionary's 'events_name' column.\n")
+} else {
+  cat("\n❌ WARNING: The following teams from 'seriea_events' are MISSING from the dictionary:\n")
+  print(missing_in_events_col)
+}
+
+
+
+#seriea_dataco in the same format (names of the teams and date) that allevents
+seriea_dataco_ready <- copy(seriea_dataco)
+seriea_dataco_ready[dictionary_seriea, on = .(HomeTeam = dataco_name), HomeTeam := i.events_name]
+seriea_dataco_ready[dictionary_seriea, on = .(AwayTeam = dataco_name), AwayTeam := i.events_name]
+seriea_dataco_ready[, date_standard := dmy(Date)]
+
+
+# --- 1. Prepare the 'seriea_events' Table for Joining ---
+# This step is still correct and necessary.
+events_to_join <- copy(seriea_events)
+events_to_join[, match_date_standard := as.Date(match_date)]
+
+
+# --- 2. Perform the Join (Corrected Direction) ---
+
+# To keep all rows from 'events_to_join', it must be the 'i' table (inside the brackets).
+seriea_events_dataco <- seriea_dataco_ready[events_to_join,
+  on = .(
+    HomeTeam == home_team.home_team_name,
+    AwayTeam == away_team.away_team_name,
+    date_standard == match_date_standard
+  ),
+  # For each row in events_to_join, create the two columns you want:
+  .(
+    dataco_id = x.id,         # 'id' from the left table (seriea_dataco_ready)
+    events_id = i.match_id      # 'match_id' from the right table (events_to_join)
+  )
+]
+
+#No matching events
+
+no_matching_seriea <- seriea_events_dataco[is.na(dataco_id), .(`events_id`)]
+unmatched_events_details <- seriea_events[match_id %in% no_matching_seriea$events_id]
+print(unmatched_events_details)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ##########################################################################################
@@ -97,6 +301,107 @@ premier_dataco <- rbindlist(
   fill = TRUE,
   idcol = "source_file"
 )
+#Add some Id
+premier_dataco[, id := paste0("premier", .I)]
+setcolorder(premier_dataco, "id")
+
+
+
+
+
+######################################   Match the names
+unique(premier_dataco$HomeTeam)
+
+unique(premier_events$home_team.home_team_name)
+
+dictionary_premier <- data.table(
+  dataco_name = c(
+    "Arsenal", "Birmingham", "Blackburn", "Fulham", "Leicester", "Man United",
+    "Portsmouth", "Charlton", "Leeds", "Liverpool", "Bolton", "Chelsea",
+    "Everton", "Man City", "Newcastle", "Southampton", "Tottenham", "Wolves",
+    "Aston Villa", "Middlesbrough", "Bournemouth", "Norwich", "Stoke",
+    "West Brom", "Sunderland", "Swansea", "Watford", "West Ham", "Crystal Palace"
+  ),
+  events_name = c(
+    "Arsenal", "Birmingham City", "Blackburn Rovers", "Fulham", "Leicester City", "Manchester United",
+    "Portsmouth", "Charlton Athletic", "Leeds United", "Liverpool", "Bolton Wanderers", "Chelsea",
+    "Everton", "Manchester City", "Newcastle United", "Southampton", "Tottenham Hotspur", "Wolverhampton Wanderers",
+    "Aston Villa", "Middlesbrough", "AFC Bournemouth", "Norwich City", "Stoke City",
+    "West Bromwich Albion", "Sunderland", "Swansea City", "Watford", "West Ham United", "Crystal Palace"
+  )
+)
+
+
+
+
+
+# --- Validation Script ---
+
+# 1. Get the unique names from your original data tables
+dataco_original_teams <- unique(premier_dataco$HomeTeam)
+events_original_teams <- unique(premier_events$home_team.home_team_name)
+
+# --- Check 1: Validate the 'dataco_name' column ---
+missing_in_dataco_col <- setdiff(dataco_original_teams, dictionary_premier$dataco_name)
+
+if (length(missing_in_dataco_col) == 0) {
+  cat("✅ SUCCESS: All teams from 'premier_dataco' are present in the dictionary's 'dataco_name' column.\n")
+} else {
+  cat("❌ WARNING: The following teams from 'premier_dataco' are MISSING from the dictionary:\n")
+  print(missing_in_dataco_col)
+}
+
+# --- Check 2: Validate the 'events_name' column ---
+missing_in_events_col <- setdiff(events_original_teams, dictionary_premier$events_name)
+
+if (length(missing_in_events_col) == 0) {
+  cat("\n✅ SUCCESS: All teams from 'premier_events' are present in the dictionary's 'events_name' column.\n")
+} else {
+  cat("\n❌ WARNING: The following teams from 'premier_events' are MISSING from the dictionary:\n")
+  print(missing_in_events_col)
+}
+
+
+
+#premier_dataco in the same format (names of the teams and date) that allevents
+premier_dataco_ready <- copy(premier_dataco)
+premier_dataco_ready[dictionary_premier, on = .(HomeTeam = dataco_name), HomeTeam := i.events_name]
+premier_dataco_ready[dictionary_premier, on = .(AwayTeam = dataco_name), AwayTeam := i.events_name]
+premier_dataco_ready[, date_standard := dmy(Date)]
+
+
+# --- 1. Prepare the 'premier_events' Table for Joining ---
+# This step is still correct and necessary.
+events_to_join <- copy(premier_events)
+events_to_join[, match_date_standard := as.Date(match_date)]
+
+
+# --- 2. Perform the Join (Corrected Direction) ---
+
+# To keep all rows from 'events_to_join', it must be the 'i' table (inside the brackets).
+premier_events_dataco <- premier_dataco_ready[events_to_join,
+  on = .(
+    HomeTeam == home_team.home_team_name,
+    AwayTeam == away_team.away_team_name,
+    date_standard == match_date_standard
+  ),
+  # For each row in events_to_join, create the two columns you want:
+  .(
+    dataco_id = x.id,         # 'id' from the left table (premier_dataco_ready)
+    events_id = i.match_id      # 'match_id' from the right table (events_to_join)
+  )
+]
+
+#No matching events
+
+no_matching_premier <- premier_events_dataco[is.na(dataco_id), .(`events_id`)]
+unmatched_events_details <- premier_events[match_id %in% no_matching_premier$events_id]
+print(unmatched_events_details)
+
+
+
+
+
 
 
 
@@ -126,6 +431,103 @@ ligue1_dataco <- rbindlist(
   idcol = "source_file"
 )
 
+#Add some Id
+ligue1_dataco[, id := paste0("ligue1", .I)]
+setcolorder(ligue1_dataco, "id")
+
+
+
+
+
+
+######################################   Match the names
+unique(ligue1_dataco$HomeTeam)
+
+unique(ligue1_events$home_team.home_team_name)
+
+
+dictionary_ligue1 <- data.table(
+  dataco_name = c(
+    "Lille", "Bastia", "Marseille", "Montpellier", "Nantes", "Nice", 
+    "Troyes", "Bordeaux", "Lyon", "Toulouse", "Monaco", "Angers", 
+    "Caen", "Guingamp", "Rennes", "St Etienne", "Lorient", "Paris SG", 
+    "Reims", "Ajaccio GFCO", "", "Strasbourg", "Metz", "Brest", 
+    "Clermont", "Lens", "Ajaccio", "Auxerre"
+  ),
+  events_name = c(
+    "Lille", "Bastia", "Marseille", "Montpellier", "Nantes", "OGC Nice",
+    "Troyes", "Bordeaux", "Lyon", "Toulouse", "AS Monaco", "Angers",
+    "Caen", "Guingamp", "Rennes", "Saint-Étienne", "Lorient", "Paris Saint-Germain",
+    "Stade de Reims", "Gazélec Ajaccio", NA, "Strasbourg", "Metz", "Stade Brestois",
+    "Clermont Foot", "Lens", "AC Ajaccio", "Auxerre"
+  )
+)
+
+
+
+# --- Validation Script ---
+
+# 1. Get the unique names from your original data tables
+dataco_original_teams <- unique(ligue1_dataco$HomeTeam)
+events_original_teams <- unique(ligue1_events$home_team.home_team_name)
+
+# --- Check 1: Validate the 'dataco_name' column ---
+missing_in_dataco_col <- setdiff(dataco_original_teams, dictionary_ligue1$dataco_name)
+
+if (length(missing_in_dataco_col) == 0) {
+  cat("✅ SUCCESS: All teams from 'ligue1_dataco' are present in the dictionary's 'dataco_name' column.\n")
+} else {
+  cat("❌ WARNING: The following teams from 'ligue1_dataco' are MISSING from the dictionary:\n")
+  print(missing_in_dataco_col)
+}
+
+# --- Check 2: Validate the 'events_name' column ---
+missing_in_events_col <- setdiff(events_original_teams, dictionary_ligue1$events_name)
+
+if (length(missing_in_events_col) == 0) {
+  cat("\n✅ SUCCESS: All teams from 'ligue1_events' are present in the dictionary's 'events_name' column.\n")
+} else {
+  cat("\n❌ WARNING: The following teams from 'ligue1_events' are MISSING from the dictionary:\n")
+  print(missing_in_events_col)
+}
+
+
+
+#ligue1_dataco in the same format (names of the teams and date) that allevents
+ligue1_dataco_ready <- copy(ligue1_dataco)
+ligue1_dataco_ready[dictionary_ligue1, on = .(HomeTeam = dataco_name), HomeTeam := i.events_name]
+ligue1_dataco_ready[dictionary_ligue1, on = .(AwayTeam = dataco_name), AwayTeam := i.events_name]
+ligue1_dataco_ready[, date_standard := dmy(Date)]
+
+
+# --- 1. Prepare the 'ligue1_events' Table for Joining ---
+# This step is still correct and necessary.
+events_to_join <- copy(ligue1_events)
+events_to_join[, match_date_standard := as.Date(match_date)]
+
+
+# --- 2. Perform the Join (Corrected Direction) ---
+
+# To keep all rows from 'events_to_join', it must be the 'i' table (inside the brackets).
+ligue1_events_dataco <- ligue1_dataco_ready[events_to_join,
+  on = .(
+    HomeTeam == home_team.home_team_name,
+    AwayTeam == away_team.away_team_name,
+    date_standard == match_date_standard
+  ),
+  # For each row in events_to_join, create the two columns you want:
+  .(
+    dataco_id = x.id,         # 'id' from the left table (ligue1_dataco_ready)
+    events_id = i.match_id      # 'match_id' from the right table (events_to_join)
+  )
+]
+
+#No matching events
+
+no_matching_ligue1 <- ligue1_events_dataco[is.na(dataco_id), .(`events_id`)]
+unmatched_events_details <- ligue1_events[match_id %in% no_matching_ligue1$events_id]
+print(unmatched_events_details)
+
 ##########################################################################################
 ############################## Bundesliga #############################################
 ##########################################################################################
@@ -145,3 +547,180 @@ bundesliga_dataco <- rbindlist(
   fill = TRUE,
   idcol = "source_file"
 )
+
+#Add some Id
+bundesliga_dataco[, id := paste0("bundesliga", .I)]
+setcolorder(bundesliga_dataco, "id")
+
+
+
+
+######################################   Match the names
+unique(bundesliga_dataco$HomeTeam)
+
+unique(bundesliga_events$home_team.home_team_name)
+
+dictionary_bundesliga <- data.table(
+  dataco_name = c(
+    "Bayern Munich", "Augsburg", "Darmstadt", "Dortmund", "Leverkusen", "Mainz",
+    "Werder Bremen", "Stuttgart", "Wolfsburg", "Hertha", "Ein Frankfurt", "FC Koln",
+    "Hamburg", "Hannover", "Hoffenheim", "Schalke 04", "Ingolstadt", "M'gladbach",
+    "Union Berlin", "RB Leipzig", "Bochum", "Freiburg", "Heidenheim"
+  ),
+  events_name = c(
+    "Bayern Munich", "Augsburg", "Darmstadt 98", "Borussia Dortmund", "Bayer Leverkusen", "FSV Mainz 05",
+    "Werder Bremen", "VfB Stuttgart", "Wolfsburg", "Hertha Berlin", "Eintracht Frankfurt", "FC Köln",
+    "Hamburger SV", "Hannover 96", "Hoffenheim", "Schalke 04", "Ingolstadt", "Borussia Mönchengladbach",
+    "Union Berlin", "RB Leipzig", "Bochum", "Freiburg", "FC Heidenheim"
+  )
+)
+
+
+
+
+
+# --- Validation Script ---
+
+# 1. Get the unique names from your original data tables
+dataco_original_teams <- unique(bundesliga_dataco$HomeTeam)
+events_original_teams <- unique(bundesliga_events$home_team.home_team_name)
+
+# --- Check 1: Validate the 'dataco_name' column ---
+missing_in_dataco_col <- setdiff(dataco_original_teams, dictionary_bundesliga$dataco_name)
+
+if (length(missing_in_dataco_col) == 0) {
+  cat("✅ SUCCESS: All teams from 'bundesliga_dataco' are present in the dictionary's 'dataco_name' column.\n")
+} else {
+  cat("❌ WARNING: The following teams from 'bundesliga_dataco' are MISSING from the dictionary:\n")
+  print(missing_in_dataco_col)
+}
+
+# --- Check 2: Validate the 'events_name' column ---
+missing_in_events_col <- setdiff(events_original_teams, dictionary_bundesliga$events_name)
+
+if (length(missing_in_events_col) == 0) {
+  cat("\n✅ SUCCESS: All teams from 'bundesliga_events' are present in the dictionary's 'events_name' column.\n")
+} else {
+  cat("\n❌ WARNING: The following teams from 'bundesliga_events' are MISSING from the dictionary:\n")
+  print(missing_in_events_col)
+}
+
+
+
+#bundesliga_dataco in the same format (names of the teams and date) that allevents
+bundesliga_dataco_ready <- copy(bundesliga_dataco)
+bundesliga_dataco_ready[dictionary_bundesliga, on = .(HomeTeam = dataco_name), HomeTeam := i.events_name]
+bundesliga_dataco_ready[dictionary_bundesliga, on = .(AwayTeam = dataco_name), AwayTeam := i.events_name]
+bundesliga_dataco_ready[, date_standard := dmy(Date)]
+
+
+# --- 1. Prepare the 'bundesliga_events' Table for Joining ---
+# This step is still correct and necessary.
+events_to_join <- copy(bundesliga_events)
+events_to_join[, match_date_standard := as.Date(match_date)]
+
+
+# --- 2. Perform the Join (Corrected Direction) ---
+
+# To keep all rows from 'events_to_join', it must be the 'i' table (inside the brackets).
+bundesliga_events_dataco <- bundesliga_dataco_ready[events_to_join,
+  on = .(
+    HomeTeam == home_team.home_team_name,
+    AwayTeam == away_team.away_team_name,
+    date_standard == match_date_standard
+  ),
+  # For each row in events_to_join, create the two columns you want:
+  .(
+    dataco_id = x.id,         # 'id' from the left table (bundesliga_dataco_ready)
+    events_id = i.match_id      # 'match_id' from the right table (events_to_join)
+  )
+]
+
+#No matching events
+
+no_matching_bundesliga <- bundesliga_events_dataco[is.na(dataco_id), .(`events_id`)]
+unmatched_events_details <- bundesliga_events[match_id %in% no_matching_bundesliga$events_id]
+print(unmatched_events_details)
+
+##############################################################################################################
+################################ PUTTING EVERYTHING TOGETHER ################################################ 
+##############################################################################################################
+
+
+## Step 1.1: Combine the Event-to-Dataco Mapping Tables
+# --------------------------------------------------------------------------
+# First, gather all the league-specific mapping tables (which link event IDs
+# to dataco IDs) into a single list.
+list_of_leagues <- list(
+  LaLiga = laliga_events_dataco,
+  SerieA = seriea_events_dataco,
+  PremierLeague = premier_events_dataco,
+  Ligue1 = ligue1_events_dataco,
+  Bundesliga = bundesliga_events_dataco
+)
+
+# Now, stack all tables in the list into one master mapping table.
+# The 'idcol' creates a 'league' column to preserve the origin of each row.
+events_to_dataco <- rbindlist(list_of_leagues, idcol = "league")
+
+
+## Step 1.2: Update the 'matches_info_all_events' Table
+# --------------------------------------------------------------------------
+# This line performs an update join. It takes the 'matches_info_all_events' table
+# and adds the 'dataco_id' column by looking up the corresponding 'events_id'
+# from the newly created 'events_to_dataco' table.
+matches_info_all_events[unique(events_to_dataco[, .(events_id, dataco_id)]), 
+                        on = .(match_id = events_id), 
+                        dataco_id := i.dataco_id]
+                        
+
+
+## Step 2.1: Combine the Main Dataco Match Information Tables
+# --------------------------------------------------------------------------
+# Similarly, gather all the cleaned, league-specific dataco tables.
+list_of_leagues_dataco <- list(
+  LaLiga = laliga_dataco_ready,
+  SerieA = seriea_dataco_ready,
+  PremierLeague = premier_dataco_ready,
+  Ligue1 = ligue1_dataco_ready,
+  Bundesliga = bundesliga_dataco_ready
+)
+
+# Stack all dataco tables. 'fill = TRUE' is a crucial safety measure here,
+# as it handles cases where one league's file has columns that others do not.
+dataco_ready_all_leagues <- rbindlist(list_of_leagues_dataco, fill = TRUE, idcol = "league")
+
+
+## Step 2.2: Create a Clean, Unique ID Mapping Key
+# --------------------------------------------------------------------------
+# To perform a clean join, we need a simple lookup table with a unique key.
+# This takes our combined event mapping table and keeps only the unique pairs
+# of 'dataco_id' and 'events_id', removing duplicate event rows.
+id_mapping_table <- unique(events_to_dataco[!is.na(dataco_id), .(dataco_id, events_id)])
+
+
+## Step 2.3: Perform an Inner Join to Create the Final Table
+# --------------------------------------------------------------------------
+# The 'merge' function performs an inner join. This single step achieves two goals:
+#   1. It filters 'dataco_ready_all_leagues', keeping only the matches that
+#      have a corresponding entry in our 'id_mapping_table'.
+#   2. It appends the corresponding 'events_id' to each of those rows.
+dataco_all_events <- merge(
+  x = dataco_ready_all_leagues,
+  y = id_mapping_table,
+  by.x = "id",
+  by.y = "dataco_id"
+)
+
+
+## Step 2.4: Final Cleanup - Rename and Reorder Columns
+# --------------------------------------------------------------------------
+# Rename the newly added 'events_id' column to the desired 'match_id'.
+setnames(dataco_all_events, "events_id", "match_id")
+
+# Move the new 'match_id' column to be the very first column in the table.
+setcolorder(dataco_all_events, "match_id")
+
+
+write.csv(dataco_all_events, "dataco_all_events.csv", row.names = FALSE)
+write.csv(matches_info_all_events, "matches_info_all_events.csv", row.names = FALSE)
