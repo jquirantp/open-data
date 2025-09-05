@@ -2,6 +2,73 @@ library(data.table)
 library(jsonlite)
 
 all_events_v2 <- fread("all_events_v2.csv")
+cleaned_matches_info <- fread("cleaned_matches_info.csv")
 
-#Spanish league
+########################################################################################################
+#1) Sanity check. We start by checking that all matches from all_events_v2 appear in cleaned_matches_info
+event_match_ids <- unique(all_events_v2$match_id)
+info_match_ids <- cleaned_matches_info$match_id
+
+# 2. Check 1: Are the match_ids in cleaned_matches_info unique?
+# Your creation script should ensure this, but it's good practice to verify.
+if (nrow(cleaned_matches_info) == length(unique(info_match_ids))) {
+  cat("✅ SUCCESS: All match_id's in 'cleaned_matches_info' are unique.\n")
+} else {
+  cat("❌ FAILURE: There are duplicate match_id's in 'cleaned_matches_info'.\n")
+}
+# 3. Check 2: Do all event match_ids appear in the info table?
+# We use setdiff() to find any IDs that are in the events but NOT in the info table.
+missing_ids <- setdiff(event_match_ids, info_match_ids)
+
+if (length(missing_ids) == 0) {
+  cat("✅ SUCCESS: All match_id's from 'all_events_v2' are present in 'cleaned_matches_info'.\n")
+} else {
+  cat("❌ FAILURE: The following match_id's from 'all_events_v2' are MISSING from 'cleaned_matches_info':\n")
+  print(missing_ids)
+}
+
+# 4 Filter 'cleaned_matches_info' to keep only the rows with the match_ids from all_events_v2
+
+
+matches_info_all_events <- cleaned_matches_info[match_id %in% event_match_ids]
+
+
+unique(matches_info_all_events$competition.competition_name)
+
+##########################################################################################
+############################## SPANISH LEAGUE #############################################
+##########################################################################################
+
+laliga_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "La Liga", ]
+
+unique(laliga_events$season.season_name)
+
+
+##########################################################################################
+############################## Serie A#############################################
+##########################################################################################
+
+seriea_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "Serie A", ]
+
+unique(seriea_events$season.season_name)
+
+
+
+##########################################################################################
+############################## Premieer LEAGUE #############################################
+##########################################################################################
+
+premier_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == "Premier League", ]
+
+unique(premier_events$season.season_name)
+
+
+
+##########################################################################################
+############################## Ligue 1 #############################################
+##########################################################################################
+
+ligue1_events <- matches_info_all_events[matches_info_all_events$competition.competition_name == " Ligue 1", ]
+
+unique(ligue1_events$season.season_name)
 
