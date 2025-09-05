@@ -1,0 +1,14 @@
+library(jsonlite)
+library(data.table)
+library(stringdist)
+library(stringi)
+library(lubridate) # Make sure to load the package
+
+all_events_v2 <- fread("all_events_v2.csv")
+dataco_all_events <- fread("dataco_all_events.csv")
+matches_info_all_events <- fread("matches_info_all_events.csv")
+
+
+length(unique(all_events_v2$match_id))
+
+#There are two additional matches in the StatsBomb data, corresponding to one from LaLiga and one from Serie A for the 1980s seasons.
