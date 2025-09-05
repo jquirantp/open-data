@@ -721,6 +721,5 @@ setnames(dataco_all_events, "events_id", "match_id")
 # Move the new 'match_id' column to be the very first column in the table.
 setcolorder(dataco_all_events, "match_id")
 
-
-write.csv(dataco_all_events, "dataco_all_events.csv", row.names = FALSE)
-write.csv(matches_info_all_events, "matches_info_all_events.csv", row.names = FALSE)
+#data.table::fwrite(dataco_all_events, "dataco_all_events.csv")
+#data.table::fwrite(matches_info_all_events, "matches_info_all_events.csv")
