@@ -1,0 +1,7 @@
+library(data.table)
+library(jsonlite)
+
+all_events_v2 <- fread("all_events_v2.csv")
+
+#Spanish league
+
