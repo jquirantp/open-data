@@ -1,0 +1,37 @@
+library(data.table)
+library(jsonlite)
+
+# --- Parameter for Testing ---
+# Set how many match files to process. Use Inf to process all of them.
+files_to_process <- 10
+# ---------------------------
+
+## 1. List and Limit Match Files
+# Get the full paths for all files in the 'data/matches' directory
+all_match_files <- list.files(path = 'data/matches', full.names = TRUE, recursive = TRUE)
+
+# Limit the number of files to process based on the parameter
+# The head() function safely handles 'Inf' by returning the full list
+limited_match_files <- head(all_match_files, files_to_process)
+
+cat(sprintf("Preparing to load information from %d match files...\n", length(limited_match_files)))
+
+## 2. Read and Combine Data
+# Read each JSON file in the limited list and combine them into a single data.table
+# This is a concise way to perform the read-and-bind operation.
+all_matches_information <- rbindlist(lapply(limited_match_files, function(fn) {
+  as.data.table(read_json(fn, simplifyVector = TRUE))
+}), fill = TRUE)
+
+## 3. Clean and Verify Data
+# It's good practice to remove any potential duplicate matches based on match_id
+all_matches_information <- unique(all_matches_information, by = "match_id")
+
+# --- Process Complete ---
+# Print the dimensions of the final table to confirm the result
+cat(sprintf("\nSuccessfully loaded data for %d unique matches with %d columns.\n",
+            nrow(all_matches_information), ncol(all_matches_information)))
+
+# Display the column names so you can see all the information you've loaded
+cat("\nAvailable columns:\n")
+print(colnames(all_matches_information))

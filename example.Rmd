@@ -1,0 +1,62 @@
+library(data.table)
+library(jsonlite)
+
+## 1. Identify a Subset of Matches
+# Set how many matches to process. Use Inf to process all of them.
+matches_to_process_count <- 10
+# ---------------------------
+
+# Get all event file paths into a data.table
+event_files_dt <- data.table(
+  fn = list.files(path = 'data/events', full.names = TRUE, recursive = TRUE)
+)
+# Extract match_id from filename to identify unique matches
+event_files_dt[, match_id := gsub(".json", "", basename(fn), fixed = TRUE)]
+
+# Get the unique IDs of the first N matches found
+subset_match_ids <- unique(event_files_dt$match_id)[1:matches_to_process_count]
+
+# Filter the file list to get only the files for those matches
+files_to_process <- event_files_dt[match_id %in% subset_match_ids]
+
+cat("Processing all event files for these", matches_to_process_count, "matches:\n")
+print(subset_match_ids)
+
+## 2. Define a Simple Function to Get ALL Data
+# This function is now very simple: it just reads a file and returns it.
+get_all_data <- function(fn) {
+  # Read the JSON file into a data.table
+  ev <- as.data.table(read_json(fn, simplifyVector = TRUE))
+  
+  # Add the filename so we can join the match_id back later
+  ev[, fn := fn]
+  
+  # Return everything, with no filtering or column selection
+  return(ev)
+}
+
+## 3. Execute and Create the Final Table
+# Apply the function to the limited list of files
+event_data_list <- lapply(files_to_process$fn, get_all_data)
+
+# Combine all the results, filling in missing columns with NA
+subset_all_events <- rbindlist(event_data_list, fill = TRUE)
+
+# Join the match_id back efficiently
+subset_all_events[files_to_process, on = "fn", match_id := i.match_id]
+
+# Clean up the temporary filename column
+subset_all_events[, fn := NULL]
+
+# Ensure match_id is numeric for consistency
+subset_all_events[, match_id := as.numeric(match_id)]
+
+# View the number of events loaded
+cat(sprintf("\nLoaded %d events from %d unique matches.\n", nrow(subset_all_events), length(unique(subset_all_events$match_id))))
+
+#################################################################################################################################################################################################################################################################################
+
+colnames(subset_all_events)
+
+colnames(matches_dt)
+
