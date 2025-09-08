@@ -2,7 +2,10 @@ library(jsonlite)
 library(data.table)
 library(stringdist)
 library(stringi)
-library(lubridate) # Make sure to load the package
+library(lubridate)
+library(rstan)
+library(tidyverse)
+library(dplyr)
 
 all_events_v2 <- fread("all_events_v2.csv")
 dataco_all_events <- fread("dataco_all_events.csv")
@@ -12,3 +15,204 @@ matches_info_all_events <- fread("matches_info_all_events.csv")
 length(unique(all_events_v2$match_id))
 
 #There are two additional matches in the StatsBomb data, corresponding to one from LaLiga and one from Serie A for the 1980s seasons.
+season_counts <- matches_info_all_events[, .N, by = .(competition.competition_name, season.season_name)]
+print(season_counts)
+
+
+#1) take data onlky from the 2015/2016 season
+
+matches_info_all_events_1516 <- matches_info_all_events[matches_info_all_events$season.season_name == "2015/2016"]
+all_events_v2_1516 <- all_events_v2 %>%
+  filter(match_id %in% matches_info_all_events_1516$match_id)
+colnames(all_events_v2_1516)
+colnames(matches_info_all_events_1516)
+
+
+#Creating the df with the state of every match at every minute 
+
+
+################### INJURY TIME ########################
+#Before doing that. We take into account the injury time
+
+
+max_injury_time_2nd_half <- all_events_v2_1516[type.name == "Half End", max(as.numeric(minute), na.rm = TRUE)]
+
+max_injury_time_1st_half <- all_events_v2_1516[(type.name == "Half End" & minute<89), max(as.numeric(minute), na.rm = TRUE)]
+
+
+
+# Create the new variable 'stats_minute_1516'
+# The initial setup to select unique match information
+base_data <- matches_info_all_events_1516 %>%
+  select(
+    "match_id",
+    "home_team.home_team_name",
+    "away_team.away_team_name",
+    "season.season_name",
+    "match_date",
+    "competition.competition_name"
+  )
+
+# Create the data frame for the first half (minutes 0 to max_injury_time_1st_half)
+first_half_data <- base_data %>%
+  # Create all combinations of matches and minutes for the first half
+  crossing(minute = -1:max_injury_time_1st_half+1) %>%
+  # Add the new 'half' columns and set their values
+  mutate(
+    period = 1 )
+
+# Create the data frame for the second half (minutes 45 to max_injury_time_2nd_half)
+second_half_data <- base_data %>%
+  # Create all combinations of matches and minutes for the second half
+  crossing(minute = 44:max_injury_time_2nd_half+1) %>%
+  # Add the new 'half' columns and set their values
+  mutate(
+    period = 2
+  )
+
+# Combine the two data frames into the final 'stats_minute_1516'
+stats_minute_1516 <- bind_rows(first_half_data, second_half_data) %>%
+  # Add the rest of the new columns and initialize them with NA
+  mutate(
+    home_goals = NA,
+    away_goals = NA,
+    yellow_cards_home = NA,
+    red_cards_home = NA,
+    yellow_cards_away = NA,
+    red_cards_away = NA,
+    prematch_local = NA,
+    prematch_away = NA,
+    ych_now = NA,
+    rch_now = NA,
+    yca_now = NA,
+    rca_now = NA,
+    home_goal_now = NA,
+    away_goal_now = NA
+  )
+
+##########################################) fogusing on  goals. 
+##################### Count the goals coming from all_events_v2_1516
+# Add the final of the 1st half
+# Filter for the first "Half End" event for each match_id
+half_end_goals <- all_events_v2_1516 %>%
+  filter(type.name == "Half End") %>%
+  group_by(match_id) %>%
+  slice(1) %>%
+  ungroup()
+
+# Combine goals and the first "Half End" events
+goals_1516 <- all_events_v2_1516 %>%
+  filter(shot.outcome.name == "Goal" | type.name == "Own Goal For") %>%
+  bind_rows(half_end_goals) %>%
+  arrange(match_id, minute) %>%
+  mutate(team.name = if_else(type.name == "Half End", "none", team.name))
+
+# 1) Simplify matches table (shorter column names for joins)
+check_goals_1516 <- matches_info_all_events_1516[
+  , .(match_id,
+      home = `home_team.home_team_name`,
+      away = `away_team.away_team_name`)
+]
+
+# 2) Aggregate once: for each (match_id, team) count goals (normal + own goal for)
+goals_agg <- goals_1516[
+  , .(goals = .N),   # each row is a goal (normal or own-goal-for), so just count them
+  by = .(match_id, team = team.name)
+]
+
+# 3) Prepare separate home/away aggregates
+home_agg <- goals_agg[, .(match_id, home = team, home_goals = goals)]
+away_agg <- goals_agg[, .(match_id, away = team, away_goals = goals)]
+
+# 4) Left-join aggregates to the matches table
+check_goals_1516 <- merge(check_goals_1516, home_agg, by = c("match_id", "home"), all.x = TRUE)
+check_goals_1516 <- merge(check_goals_1516, away_agg, by = c("match_id", "away"), all.x = TRUE)
+
+# 5) Replace NA with 0
+check_goals_1516[
+  , `:=`(
+      home_goals = fcoalesce(home_goals, 0L),
+      away_goals = fcoalesce(away_goals, 0L)
+  )
+]
+
+# 6) Final scores (no need to manually flip own goals anymore)
+check_goals_1516[
+  , `:=`(
+      home_score_all_events = home_goals,
+      away_score_all_events = away_goals
+  )
+]
+
+# 7) Keep only the columns you want
+check_goals_1516 <- check_goals_1516[
+  , .(match_id, home_team = home, away_team = away, home_score_all_events, away_score_all_events)
+]
+
+##################### Compare with matches_info_all_events_1516
+validation_df <- check_goals_1516 %>%
+  left_join(
+    matches_info_all_events_1516 %>%
+      select(
+        match_id,
+        home_team.home_team_name,
+        away_team.away_team_name,
+        home_score,
+        away_score
+      ),
+    by = "match_id"
+  )
+
+problematic <- validation_df %>%
+  filter(
+    home_score_all_events != home_score |
+    away_score_all_events != away_score |
+    home_team != home_team.home_team_name |
+    away_team != away_team.away_team_name
+  )
+
+#################################################### GOALS IS WORKING CORRECTLY  ###################################################
+
+
+
+##### goals_now
+# Step 1: Count goals per minute
+goals_per_minute <- goals_1516[, .(goal_count = .N), by = .(match_id, period, minute, team.name)]
+
+
+
+
+# Convert stats_minute_1516 to data.table if not already
+setDT(stats_minute_1516)
+
+# Initialize home_goal_now and away_goal_now to 0 if NA
+stats_minute_1516[, `:=`(
+  home_goal_now = fifelse(is.na(home_goal_now), 0L, as.integer(home_goal_now)),
+  away_goal_now = fifelse(is.na(away_goal_now), 0L, as.integer(away_goal_now))
+)]
+
+# Perform two separate update joins (simpler and safer)
+# Home goals
+stats_minute_1516[goals_per_minute,
+                  on = .(match_id, period, minute, `home_team.home_team_name` = team.name),
+                  home_goal_now := i.goal_count]
+
+# Away goals
+stats_minute_1516[goals_per_minute,
+                  on = .(match_id, period, minute, `away_team.away_team_name` = team.name),
+                  away_goal_now := i.goal_count]
+                  
+##### goals so far
+# Step 1: Ensure the data is sorted chronologically.
+setorder(stats_minute_1516, match_id, period, minute)
+
+# Step 2: **FIX:** Ensure the target columns are the correct data type (integer).
+# This prevents the "assigning to type 'logical'" warning.
+stats_minute_1516[, `:=`(home_goals = as.integer(home_goals), away_goals = as.integer(away_goals))]
+
+# Step 3: Calculate the cumulative score.
+# This will now work without warnings as the column types match.
+stats_minute_1516[, `:=`(
+  home_goals = shift(cumsum(home_goal_now), fill = 0L),
+  away_goals = shift(cumsum(away_goal_now), fill = 0L)
+), by = .(match_id)]
