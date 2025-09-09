@@ -3,6 +3,7 @@ library(jsonlite)
 
 # --- Parameter for Testing ---
 # Set how many event files to process. Use Inf to process all of them.
+#files_to_process <- Inf
 files_to_process <- Inf
 # ---------------------------
 
@@ -39,7 +40,7 @@ get_events_original <- function(fn) {
   # Filter logic remains the same
   ev2 <- ev[
     pass.type.name == 'Corner' |
-      type.name %in% c('Shot', 'Foul Committed', 'Half End', 'Half Start', 'Own Goal For')
+      type.name %in% c('Shot', 'Foul Committed', 'Half End', 'Half Start', 'Own Goal For', 'Bad Behaviour')
   ]
   
   # Exit if no relevant events are found
@@ -71,21 +72,19 @@ get_events_original <- function(fn) {
 event_data_list <- lapply(event_files_to_process$fn, get_events_original)
 
 # Combine all the results
-all_events_v2 <- rbindlist(event_data_list, fill = TRUE)
+all_events_v3 <- rbindlist(event_data_list, fill = TRUE)
 
 # Join the match_id back efficiently
-all_events_v2[event_files_to_process, on = "fn", match_id := i.match_id]
+all_events_v3[event_files_to_process, on = "fn", match_id := i.match_id]
 # FIX: Convert the character match_id to a numeric type
-all_events_v2[, match_id := as.numeric(match_id)]
+all_events_v3[, match_id := as.numeric(match_id)]
 
 
 
-#write.csv(all_events_v2, "all_events_v2.csv", row.names = FALSE)
+#write.csv(all_events_v3, "all_events_v3.csv", row.names = FALSE)
 
 #all_events <- fread("all_events.csv")
 
 
 
-length(unique(all_events$match_id))
 
-length(unique(all_events_v2$match_id))

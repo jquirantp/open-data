@@ -1,0 +1,132 @@
+# Load libraries
+library(data.table)
+library(tidyverse) # Keep for potential data exploration, though not used in the main pipeline
+
+#v3 i added  type.name %in% c( 'Bad Behaviour') which we need to account for the cards associated do bad behaviour. this is the only difference with v2
+
+
+# --- 1. Data Loading and Initial Filtering  ---
+all_events_v3 <- fread("all_events_v3.csv")
+matches_info_all_events <- fread("matches_info_all_events.csv")
+
+matches_info_1516 <- matches_info_all_events[season.season_name == "2015/2016"]
+all_events_1516 <- all_events_v3[match_id %in% matches_info_1516$match_id]
+
+
+
+# --- 2. Build a Robust Minute-by-Minute Timeline ---
+### It calculates stoppage time *per match* to avoid data loss or creating phantom minutes.
+
+# 2a. Find the actual end minute for each half of EACH match
+end_times_per_match <- all_events_1516[
+  type.name == "Half End",
+  .(end_minute = max(minute)),
+  by = .(match_id, period)
+]
+
+# 2b. Get the base match info needed for the timeline
+base_match_data <- unique(matches_info_1516[, .(
+  match_id,
+  home_team_name = home_team.home_team_name,
+  away_team_name = away_team.away_team_name
+)])
+
+# 2c. Join the end times to the match data
+match_timings <- end_times_per_match[base_match_data, on = "match_id"]
+
+# 2d. Generate the precise minute-by-minute timeline for all matches at once
+# This is a core data.table technique: for each row in match_timings, it creates a sequence of minutes.
+stats_minute_1516 <- match_timings[, .(minute = 0:end_minute), by = .(
+  match_id,
+  period,
+  home_team_name,
+  away_team_name
+)]
+
+# 2e. Initialize all state columns to integer zero (cleaner than NA)
+state_cols <- c(
+  "home_goals", "away_goals", "yellow_cards_home", "red_cards_home",
+  "yellow_cards_away", "red_cards_away", "home_goal_now", "away_goal_now",
+  "ych_now", "rch_now", "yca_now", "rca_now"
+)
+stats_minute_1516[, (state_cols) := 0L]
+
+# 2f. Set order for efficient joins and calculations
+setorder(stats_minute_1516, match_id, period, minute)
+
+
+# --- 3. Process and Join Goal Events ---
+# 3a. Filter for goal events
+goal_events <- all_events_1516[shot.outcome.name == "Goal" | type.name == "Own Goal For"]
+
+# 3b. Count goals per minute for each team
+goals_per_minute <- goal_events[,
+  .(goal_count = .N),
+  by = .(match_id, period, minute, team.name)
+]
+
+# 3c. Update the main table with goals scored "now"
+stats_minute_1516[goals_per_minute,
+  on = .(match_id, period, minute, home_team_name = team.name),
+  home_goal_now := i.goal_count
+]
+stats_minute_1516[goals_per_minute,
+  on = .(match_id, period, minute, away_team_name = team.name),
+  away_goal_now := i.goal_count
+]
+
+
+# --- 4. Process and Join Card Events ---
+### CHANGE: We now keep second yellows separate to retain information.
+
+# 4a. Filter for card events
+card_events <- all_events_1516[
+  (bad_behaviour.card.name %in% c("Yellow Card", "Red Card", "Second Yellow")) |
+  (foul_committed.card.name %in% c("Yellow Card", "Red Card", "Second Yellow"))
+]
+
+# 4b. Consolidate card info into one column and count per type
+card_events[, card_type := fcoalesce(bad_behaviour.card.name, foul_committed.card.name)]
+cards_per_minute <- card_events[,
+  .(
+    yellows = sum(card_type == "Yellow Card", na.rm = TRUE),
+    second_yellows = sum(card_type == "Second Yellow", na.rm = TRUE),
+    reds = sum(card_type == "Red Card", na.rm = TRUE)
+  ),
+  by = .(match_id, period, minute, team.name)
+]
+
+# 4c. Update the main table with cards issued "now"
+# A dismissal (player sent off) is a red OR a second yellow.
+stats_minute_1516[cards_per_minute,
+  on = .(match_id, period, minute, home_team_name = team.name),
+  `:=`(ych_now = i.yellows, rch_now = i.reds + i.second_yellows)
+]
+stats_minute_1516[cards_per_minute,
+  on = .(match_id, period, minute, away_team_name = team.name),
+  `:=`(yca_now = i.yellows, rca_now = i.reds + i.second_yellows)
+]
+
+
+# --- 5. Calculate Cumulative Match State ---
+### CHANGE: This logic is the same, but now it's applied to the cleanly generated data.
+stats_minute_1516[, `:=`(
+  home_goals = shift(cumsum(home_goal_now), fill = 0L),
+  away_goals = shift(cumsum(away_goal_now), fill = 0L),
+  yellow_cards_home = shift(cumsum(ych_now), fill = 0L),
+  red_cards_home = shift(cumsum(rch_now), fill = 0L),
+  yellow_cards_away = shift(cumsum(yca_now), fill = 0L),
+  red_cards_away = shift(cumsum(rca_now), fill = 0L)
+), by = .(match_id)]
+
+
+# --- 6. Final Validation (Good practice) ---
+# Get final state of each match from our new table
+final_state <- stats_minute_1516[, .SD[.N], by = match_id]
+
+# Compare with original match info
+validation <- matches_info_1516[final_state, on = "match_id"]
+
+# Check for score mismatches (should be 0)
+mismatches <- validation[home_score != (home_goals + home_goal_now) | away_score != (away_goals + away_goal_now)]
+print(paste("Found", nrow(mismatches), "mismatched scores."))

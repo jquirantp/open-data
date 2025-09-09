@@ -7,12 +7,14 @@ library(rstan)
 library(tidyverse)
 library(dplyr)
 
-all_events_v2 <- fread("all_events_v2.csv")
+#v3 i added  type.name %in% c( 'Bad Behaviour') which we need to account for the cards associated do bad behaviour. this is the only difference with v2
+
+all_events_v3 <- fread("all_events_v3.csv")
 dataco_all_events <- fread("dataco_all_events.csv")
 matches_info_all_events <- fread("matches_info_all_events.csv")
 
 
-length(unique(all_events_v2$match_id))
+length(unique(all_events_v3$match_id))
 
 #There are two additional matches in the StatsBomb data, corresponding to one from LaLiga and one from Serie A for the 1980s seasons.
 season_counts <- matches_info_all_events[, .N, by = .(competition.competition_name, season.season_name)]
@@ -22,9 +24,9 @@ print(season_counts)
 #1) take data onlky from the 2015/2016 season
 
 matches_info_all_events_1516 <- matches_info_all_events[matches_info_all_events$season.season_name == "2015/2016"]
-all_events_v2_1516 <- all_events_v2 %>%
+all_events_v3_1516 <- all_events_v3 %>%
   filter(match_id %in% matches_info_all_events_1516$match_id)
-colnames(all_events_v2_1516)
+colnames(all_events_v3_1516)
 colnames(matches_info_all_events_1516)
 
 
@@ -35,9 +37,9 @@ colnames(matches_info_all_events_1516)
 #Before doing that. We take into account the injury time
 
 
-max_injury_time_2nd_half <- all_events_v2_1516[type.name == "Half End", max(as.numeric(minute), na.rm = TRUE)]
+max_injury_time_2nd_half <- all_events_v3_1516[type.name == "Half End", max(as.numeric(minute), na.rm = TRUE)]
 
-max_injury_time_1st_half <- all_events_v2_1516[(type.name == "Half End" & minute<89), max(as.numeric(minute), na.rm = TRUE)]
+max_injury_time_1st_half <- all_events_v3_1516[(type.name == "Half End" & minute<89), max(as.numeric(minute), na.rm = TRUE)]
 
 
 
@@ -91,17 +93,17 @@ stats_minute_1516 <- bind_rows(first_half_data, second_half_data) %>%
   )
 
 ##########################################) fogusing on  goals. 
-##################### Count the goals coming from all_events_v2_1516
+##################### Count the goals coming from all_events_v3_1516
 # Add the final of the 1st half
 # Filter for the first "Half End" event for each match_id
-half_end_goals <- all_events_v2_1516 %>%
+half_end_goals <- all_events_v3_1516 %>%
   filter(type.name == "Half End") %>%
   group_by(match_id) %>%
   slice(1) %>%
   ungroup()
 
 # Combine goals and the first "Half End" events
-goals_1516 <- all_events_v2_1516 %>%
+goals_1516 <- all_events_v3_1516 %>%
   filter(shot.outcome.name == "Goal" | type.name == "Own Goal For") %>%
   bind_rows(half_end_goals) %>%
   arrange(match_id, minute) %>%
@@ -174,7 +176,7 @@ problematic <- validation_df %>%
 #################################################### GOALS IS WORKING CORRECTLY  ###################################################
 
 
-
+############################## GOALS ###########################
 ##### goals_now
 # Step 1: Count goals per minute
 goals_per_minute <- goals_1516[, .(goal_count = .N), by = .(match_id, period, minute, team.name)]
@@ -206,7 +208,7 @@ stats_minute_1516[goals_per_minute,
 # Step 1: Ensure the data is sorted chronologically.
 setorder(stats_minute_1516, match_id, period, minute)
 
-# Step 2: **FIX:** Ensure the target columns are the correct data type (integer).
+# Step 2: Ensure the target columns are the correct data type (integer).
 # This prevents the "assigning to type 'logical'" warning.
 stats_minute_1516[, `:=`(home_goals = as.integer(home_goals), away_goals = as.integer(away_goals))]
 
@@ -216,3 +218,132 @@ stats_minute_1516[, `:=`(
   home_goals = shift(cumsum(home_goal_now), fill = 0L),
   away_goals = shift(cumsum(away_goal_now), fill = 0L)
 ), by = .(match_id)]
+
+#Step 4 we check that the variable constructed matches goals
+goals_stats_check <- stats_minute_1516[stats_minute_1516$period == 2 & stats_minute_1516$minute == 103, ]
+# First, join the two data frames on match_id
+combined_df <- inner_join(goals_stats_check, matches_info_all_events_1516, by = "match_id")
+
+# Then, check for equality for each pair of columns and create new logical columns
+check_results <- combined_df %>%
+  mutate(
+    home_team_match = home_team.home_team_name.x == home_team.home_team_name.y,
+    away_team_match = away_team.away_team_name.x == away_team.away_team_name.y,
+    home_score_match = home_goals == home_score,
+    away_score_match = away_goals == away_score
+  )
+
+# Now, you can summarize the results to see if everything matched.
+# For example, to check if all rows had a full match:
+all(check_results$home_team_match)
+all(check_results$away_team_match)
+all(check_results$home_score_match)
+all(check_results$away_score_match)
+
+# Or to see which rows had mismatches:
+mismatched_rows <- check_results %>%
+  filter(!home_team_match | !away_team_match | !home_score_match | !away_score_match)
+  
+  
+#GOALS LOADED. WE ARE GOOD.
+
+
+############################## Yellow and RED CARDS ###########################
+# 1. Filter for card events
+cards_1516 <- all_events_v3_1516[
+  (bad_behaviour.card.name == "Yellow Card" | bad_behaviour.card.name == "Red Card" | bad_behaviour.card.name == "Second Yellow") |
+    (foul_committed.card.name == "Yellow Card" | foul_committed.card.name == "Red Card"| foul_committed.card.name =="Second Yellow")
+]
+
+# 2. Consolidate card types and count them per minute per team
+cards_per_minute <- cards_1516[,
+  .(
+    yellow_cards = sum(fcoalesce(bad_behaviour.card.name, foul_committed.card.name) == "Yellow Card", na.rm = TRUE),
+    red_cards = sum(fcoalesce(bad_behaviour.card.name, foul_committed.card.name) == "Red Card", na.rm = TRUE),
+    second_yellow = sum(fcoalesce(bad_behaviour.card.name, foul_committed.card.name) == "Second Yellow", na.rm = TRUE)
+  ),
+  by = .(match_id, period, minute, team.name)
+]
+
+cards_per_minute[, red_cards_and_2yellow := red_cards + second_yellow]
+
+
+# Convert existing logical NA columns to integer type
+stats_minute_1516[, `:=`(
+  ych_now = as.integer(ych_now),
+  rch_now = as.integer(rch_now),
+  yca_now = as.integer(yca_now),
+  rca_now = as.integer(rca_now)
+)]
+
+# Now you can use fcoalesce without error
+stats_minute_1516[, `:=`(
+  ych_now = fcoalesce(ych_now, 0L),
+  rch_now = fcoalesce(rch_now, 0L),
+  yca_now = fcoalesce(yca_now, 0L),
+  rca_now = fcoalesce(rca_now, 0L)
+)]
+
+# Update home team card counts
+stats_minute_1516[cards_per_minute,
+  on = .(match_id, period, minute, `home_team.home_team_name` = team.name),
+  `:=`(
+    ych_now = i.yellow_cards,
+    rch_now = i.red_cards_and_2yellow # Use the new combined column
+  )
+]
+
+# Update away team card counts
+stats_minute_1516[cards_per_minute,
+  on = .(match_id, period, minute, `away_team.away_team_name` = team.name),
+  `:=`(
+    yca_now = i.yellow_cards,
+    rca_now = i.red_cards_and_2yellow # Use the new combined column
+  )
+]
+
+#CUMSUM
+
+
+# Convert the cumulative card columns to integer and fill NA with 0.
+# The key is to run as.integer() on the columns first.
+stats_minute_1516[, `:=`(
+  yellow_cards_home = as.integer(yellow_cards_home),
+  red_cards_home = as.integer(red_cards_home),
+  yellow_cards_away = as.integer(yellow_cards_away),
+  red_cards_away = as.integer(red_cards_away)
+)]
+
+stats_minute_1516[, `:=`(
+  yellow_cards_home = fcoalesce(yellow_cards_home, 0L),
+  red_cards_home = fcoalesce(red_cards_home, 0L),
+  yellow_cards_away = fcoalesce(yellow_cards_away, 0L),
+  red_cards_away = fcoalesce(red_cards_away, 0L)
+)]
+
+
+
+#Do the cumsum (off all the previous minutes)
+stats_minute_1516[, `:=`(
+   yellow_cards_home = shift(cumsum(ych_now), fill = 0L),
+   red_cards_home = shift(cumsum(rch_now), fill = 0L),
+   yellow_cards_away = shift(cumsum(yca_now), fill = 0L),
+   red_cards_away = shift(cumsum(rca_now), fill = 0L)
+ ), by = .(match_id)]
+
+
+
+##################################### Injury time ##################################### 
+end_half_1516 <- all_events_v3_1516[all_events_v3_1516$type.name == "Half End", c("match_id", "period", "minute", "second", "type.name")]
+end_half_1516 <- unique(end_half_1516)
+
+####We eliminate the rows that are beyond the end of the half
+merged_data <- merge(
+  stats_minute_1516, 
+  end_half_1516[, c("match_id", "period", "minute")], 
+  by = c("match_id", "period"),
+  suffixes = c("", "_end")
+)
+stats_minute_1516 <- merged_data[merged_data$minute <= merged_data$minute_end, ]
+
+
