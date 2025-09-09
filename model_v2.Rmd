@@ -13,6 +13,9 @@ matches_info_1516 <- matches_info_all_events[season.season_name == "2015/2016"]
 all_events_1516 <- all_events_v3[match_id %in% matches_info_1516$match_id]
 
 
+########################## ########################## ########################## ########################## ########################## ########################## 
+########################## NO Rescaling the data  ########################## ########################## ########################## 
+########################## ########################## ########################## ########################## ########################## ########################## 
 
 # --- 2. Build a Robust Minute-by-Minute Timeline ---
 ### It calculates stoppage time *per match* to avoid data loss or creating phantom minutes.
@@ -20,9 +23,9 @@ all_events_1516 <- all_events_v3[match_id %in% matches_info_1516$match_id]
 # 2a. Find the actual end minute for each half of EACH match
 end_times_per_match <- all_events_1516[
   type.name == "Half End",
-  .(end_minute = max(minute)),
+  .SD[which.max(minute)], # Select the entire row with the max minute for the group
   by = .(match_id, period)
-]
+][, .(match_id, period, end_minute = minute, end_second = second)] # Select and rename the desired columns
 
 # 2b. Get the base match info needed for the timeline
 base_match_data <- unique(matches_info_1516[, .(
@@ -34,15 +37,27 @@ base_match_data <- unique(matches_info_1516[, .(
 # 2c. Join the end times to the match data
 match_timings <- end_times_per_match[base_match_data, on = "match_id"]
 
-# 2d. Generate the precise minute-by-minute timeline for all matches at once
-# This is a core data.table technique: for each row in match_timings, it creates a sequence of minutes.
-stats_minute_1516 <- match_timings[, .(minute = 0:end_minute), by = .(
+# 2d. Generate the precise minute-by-minute timeline for all matches
+# Separate the logic for each period to create the correct minute sequences.
+
+# Timeline for Period 1
+timeline_p1 <- match_timings[period == 1, .(minute = 0:end_minute), by = .(
   match_id,
   period,
   home_team_name,
   away_team_name
 )]
 
+# Timeline for Period 2
+timeline_p2 <- match_timings[period == 2, .(minute = 45:end_minute), by = .(
+  match_id,
+  period,
+  home_team_name,
+  away_team_name
+)]
+
+# Combine the two timelines into one
+stats_minute_1516 <- rbindlist(list(timeline_p1, timeline_p2))
 # 2e. Initialize all state columns to integer zero (cleaner than NA)
 state_cols <- c(
   "home_goals", "away_goals", "yellow_cards_home", "red_cards_home",
@@ -130,3 +145,200 @@ validation <- matches_info_1516[final_state, on = "match_id"]
 # Check for score mismatches (should be 0)
 mismatches <- validation[home_score != (home_goals + home_goal_now) | away_score != (away_goals + away_goal_now)]
 print(paste("Found", nrow(mismatches), "mismatched scores."))
+
+
+########################## ########################## ########################## ########################## ########################## ########################## 
+########################## Rescaling the data: from 0 to 45 and from 45 to 90  ########################## ########################## ########################## 
+########################## ########################## ########################## ########################## ########################## ########################## 
+# --- Renormalize Event Timestamps ---
+
+# Step 1: Create a copy to work on, preserving the original data
+all_events_1516_renormalized <- copy(all_events_1516)
+
+# Step 2: Merge the actual end times onto the events table.
+# This gives each event row access to its half's actual end time.
+all_events_1516_renormalized <- merge(all_events_1516_renormalized, end_times_per_match, by = c("match_id", "period"))
+
+# Step 3: Calculate the new, renormalized minute and second.
+# We do this by reference for efficiency using `:=`.
+all_events_1516_renormalized[, `:=` (
+  # Convert all times to total seconds from the start of the match for calculation
+  event_total_seconds = minute * 60 + second,
+  half_end_total_seconds = end_minute * 60 + end_second
+)]
+
+# Step 4: Apply the scaling logic differently for each period.
+
+# For Period 1: Scale the event's time into a 0-2700 second range (0-45 mins)
+all_events_1516_renormalized[period == 1, 
+  renormalized_total_seconds := (event_total_seconds / half_end_total_seconds) * (45 * 60)
+]
+
+# For Period 2:
+# - Calculate the time elapsed since the start of the 2nd half (45:00).
+# - Calculate the total duration of the 2nd half.
+# - Scale the elapsed time and add it back to the 45-minute mark.
+all_events_1516_renormalized[period == 2, 
+  renormalized_total_seconds := {
+    time_in_half = event_total_seconds - (45 * 60)
+    duration_of_half = half_end_total_seconds - (45 * 60)
+    
+    # FIX: Use ifelse() for vectorized conditional logic.
+    # This checks each row's duration_of_half individually.
+    scaled_time_in_half = ifelse(duration_of_half > 0, (time_in_half / duration_of_half) * (45 * 60), 0)
+    
+    (45 * 60) + scaled_time_in_half
+  }
+]
+
+# Step 5: Convert the renormalized total seconds back into minute and second columns.
+all_events_1516_renormalized[, `:=` (
+  renormalized_minute = floor(renormalized_total_seconds / 60),
+  renormalized_second = floor(renormalized_total_seconds %% 60)
+)]
+
+# Step 6: Clean up intermediate columns and view the result.
+all_events_1516_renormalized[, `:=` (
+  event_total_seconds = NULL,
+  half_end_total_seconds = NULL,
+  end_minute = NULL,
+  end_second = NULL
+)]
+
+
+# Use setnames() to efficiently rename the columns by reference
+setnames(all_events_1516_renormalized, 
+         old = c("minute", "second", "renormalized_minute", "renormalized_second"), 
+         new = c("true_minute", "true_second", "minute", "second"))
+         
+         
+
+# --- 2. Build a Robust Minute-by-Minute Timeline ---
+### It calculates stoppage time *per match* to avoid data loss or creating phantom minutes.
+
+# 2a. Find the actual end minute for each half of EACH match
+end_times_per_match <- all_events_1516_renormalized[
+  type.name == "Half End",
+  .SD[which.max(minute)], # Select the entire row with the max minute for the group
+  by = .(match_id, period)
+][, .(match_id, period, end_minute = minute, end_second = second)] # Select and rename the desired columns
+
+# 2b. Get the base match info needed for the timeline
+base_match_data <- unique(matches_info_1516[, .(
+  match_id,
+  home_team_name = home_team.home_team_name,
+  away_team_name = away_team.away_team_name
+)])
+
+# 2c. Join the end times to the match data
+match_timings <- end_times_per_match[base_match_data, on = "match_id"]
+
+# 2d. Generate the precise minute-by-minute timeline for all matches
+# Separate the logic for each period to create the correct minute sequences.
+
+# Timeline for Period 1
+timeline_p1 <- match_timings[period == 1, .(minute = 0:end_minute), by = .(
+  match_id,
+  period,
+  home_team_name,
+  away_team_name
+)]
+
+# Timeline for Period 2
+timeline_p2 <- match_timings[period == 2, .(minute = 45:end_minute), by = .(
+  match_id,
+  period,
+  home_team_name,
+  away_team_name
+)]
+
+# Combine the two timelines into one
+stats_minute_1516_renormalized <- rbindlist(list(timeline_p1, timeline_p2))
+# 2e. Initialize all state columns to integer zero (cleaner than NA)
+state_cols <- c(
+  "home_goals", "away_goals", "yellow_cards_home", "red_cards_home",
+  "yellow_cards_away", "red_cards_away", "home_goal_now", "away_goal_now",
+  "ych_now", "rch_now", "yca_now", "rca_now"
+)
+stats_minute_1516_renormalized[, (state_cols) := 0L]
+
+# 2f. Set order for efficient joins and calculations
+setorder(stats_minute_1516_renormalized, match_id, period, minute)
+
+
+# --- 3. Process and Join Goal Events ---
+# 3a. Filter for goal events
+goal_events <- all_events_1516_renormalized[shot.outcome.name == "Goal" | type.name == "Own Goal For"]
+
+# 3b. Count goals per minute for each team
+goals_per_minute <- goal_events[,
+  .(goal_count = .N),
+  by = .(match_id, period, minute, team.name)
+]
+
+# 3c. Update the main table with goals scored "now"
+stats_minute_1516_renormalized[goals_per_minute,
+  on = .(match_id, period, minute, home_team_name = team.name),
+  home_goal_now := i.goal_count
+]
+stats_minute_1516_renormalized[goals_per_minute,
+  on = .(match_id, period, minute, away_team_name = team.name),
+  away_goal_now := i.goal_count
+]
+
+
+# --- 4. Process and Join Card Events ---
+### CHANGE: We now keep second yellows separate to retain information.
+
+# 4a. Filter for card events
+card_events <- all_events_1516_renormalized[
+  (bad_behaviour.card.name %in% c("Yellow Card", "Red Card", "Second Yellow")) |
+  (foul_committed.card.name %in% c("Yellow Card", "Red Card", "Second Yellow"))
+]
+
+# 4b. Consolidate card info into one column and count per type
+card_events[, card_type := fcoalesce(bad_behaviour.card.name, foul_committed.card.name)]
+cards_per_minute <- card_events[,
+  .(
+    yellows = sum(card_type == "Yellow Card", na.rm = TRUE),
+    second_yellows = sum(card_type == "Second Yellow", na.rm = TRUE),
+    reds = sum(card_type == "Red Card", na.rm = TRUE)
+  ),
+  by = .(match_id, period, minute, team.name)
+]
+
+# 4c. Update the main table with cards issued "now"
+# A dismissal (player sent off) is a red OR a second yellow.
+stats_minute_1516_renormalized[cards_per_minute,
+  on = .(match_id, period, minute, home_team_name = team.name),
+  `:=`(ych_now = i.yellows, rch_now = i.reds + i.second_yellows)
+]
+stats_minute_1516_renormalized[cards_per_minute,
+  on = .(match_id, period, minute, away_team_name = team.name),
+  `:=`(yca_now = i.yellows, rca_now = i.reds + i.second_yellows)
+]
+
+
+# --- 5. Calculate Cumulative Match State ---
+### CHANGE: This logic is the same, but now it's applied to the cleanly generated data.
+stats_minute_1516_renormalized[, `:=`(
+  home_goals = shift(cumsum(home_goal_now), fill = 0L),
+  away_goals = shift(cumsum(away_goal_now), fill = 0L),
+  yellow_cards_home = shift(cumsum(ych_now), fill = 0L),
+  red_cards_home = shift(cumsum(rch_now), fill = 0L),
+  yellow_cards_away = shift(cumsum(yca_now), fill = 0L),
+  red_cards_away = shift(cumsum(rca_now), fill = 0L)
+), by = .(match_id)]
+
+
+# --- 6. Final Validation (Good practice) ---
+# Get final state of each match from our new table
+final_state <- stats_minute_1516_renormalized[, .SD[.N], by = match_id]
+
+# Compare with original match info
+validation <- matches_info_1516[final_state, on = "match_id"]
+
+# Check for score mismatches (should be 0)
+mismatches <- validation[home_score != (home_goals + home_goal_now) | away_score != (away_goals + away_goal_now)]
+print(paste("Found", nrow(mismatches), "mismatched scores."))
+
