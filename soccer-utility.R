@@ -208,7 +208,7 @@ soccerutility.output_mkts = function(cs_gn,tg,sup,df,tgt_hilo){
   #hilo
   u = soccerutility.hilo_under(cs,tgt_hilo)
   
-  return(c(1/h,1/d,1/a,1/u,1/(1-u)))
+  return(c(h, d, a, u, 1 - u))
   
 }
 
