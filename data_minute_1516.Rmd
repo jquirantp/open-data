@@ -347,6 +347,5 @@ print(paste("Found", nrow(mismatches), "mismatched scores."))
 #write.csv(stats_minute_1516, "stats_minute_1516.csv", row.names = FALSE)
 #write.csv(all_events_1516, "all_events_1516.csv", row.names = FALSE)
 #write.csv(all_events_1516_renormalized, "all_events_1516_renormalized.csv", row.names = FALSE)
-#write.csv(all_events_1516_renormalized, "all_events_1516_renormalized.csv", row.names = FALSE)
 #write.csv(matches_info_1516, "matches_info_1516.csv", row.names = FALSE)
 

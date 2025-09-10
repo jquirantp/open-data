@@ -1,0 +1,15 @@
+# Load libraries
+library(data.table)
+library(tidyverse) # Keep for potential data exploration, though not used in the main pipeline
+
+#Loading files
+
+stats_minute_1516 <- fread("stats_minute_1516.csv")
+stats_minute_1516_renormalized <- fread("stats_minute_1516_renormalized.csv")
+all_events_1516 <- fread("all_events_1516.csv")
+all_events_1516_renormalized <- fread("all_events_1516_renormalized.csv")
+matches_info_1516 <- fread("matches_info_1516.csv")
+
+
+
+#write.csv(matches_info_1516, "matches_info_1516.csv", row.names = FALSE)
