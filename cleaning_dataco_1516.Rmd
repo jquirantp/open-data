@@ -9,7 +9,130 @@ stats_minute_1516_renormalized <- fread("stats_minute_1516_renormalized.csv")
 all_events_1516 <- fread("all_events_1516.csv")
 all_events_1516_renormalized <- fread("all_events_1516_renormalized.csv")
 matches_info_1516 <- fread("matches_info_1516.csv")
+dataco_all_events <- fread("dataco_all_events.csv")
+dataco_all_events_1516_prob<- fread("dataco_all_events_1516_prob.csv")
+
+#1) Filter to matches for thr 15/16 season
+dataco_all_events_1516 <- dataco_all_events[match_id %in% matches_info_1516$match_id]
+
+#2) Eliminate the columns that only contain NA
+# Identify columns where all entries are NA
+cols_to_remove <- names(dataco_all_events_1516)[sapply(dataco_all_events_1516, function(col) all(is.na(col)))]
+
+# Provide feedback on which columns are being removed
+if (length(cols_to_remove) > 0) {
+  print("Removing the following columns as they are entirely NA:")
+  print(cols_to_remove)
+  
+  # Remove the identified columns by reference using the := operator
+  dataco_all_events_1516[, (cols_to_remove) := NULL]
+  
+} else {
+  print("No columns were found to be entirely NA.")
+}
+
+
+colnames(dataco_all_events_1516)
+
+#small checks
+#1) NA?
+
+# Calculate the sum of NA values for each column
+na_counts <- colSums(is.na(dataco_all_events_1516))
+
+# Filter the results to show only the columns that have one or more NAs
+columns_with_na <- na_counts[na_counts > 0]
+
+# Print the results
+if (length(columns_with_na) > 0) {
+  print("The following columns contain NA values (Column Name = Number of NAs):")
+  print(columns_with_na)
+} else {
+  print("Success: No NA values were found in the dataco_all_events_1516 data table.")
+}
 
 
 
-#write.csv(matches_info_1516, "matches_info_1516.csv", row.names = FALSE)
+#2) Same final result that the one in matches_info?
+# To ensure a clean comparison, select only the necessary columns from each table.
+# The unique() on dataco_all_events_1516 is a safeguard in case there are multiple rows per match.
+dataco_scores <- dataco_all_events_1516[, .(match_id, FTHG, FTAG)]
+matches_info_scores <- matches_info_1516[, .(match_id, home_score, away_score)]
+
+# Merge the two tables by their common match_id
+comparison_dt <- merge(dataco_scores, matches_info_scores, by = "match_id")
+
+# Filter for rows where the home scores OR the away scores do not match
+mismatched_ids <- comparison_dt[FTHG != home_score | FTAG != away_score, match_id]
+
+# Print the results of the check
+if (length(mismatched_ids) > 0) {
+  print("Mismatch found between final scores for the following match_ids:")
+  print(mismatched_ids)
+} else {
+  print("SUCCESS: All final scores match between the two datasets.")
+}
+
+############################## READY. Let us keep only the relevant variables ##################
+#I will use data from BetBrain  and  Pinnacle (closing) . we have them for all matches
+
+# Calculate implied probabilities from Pinnacle closing odds
+dataco_all_events_1516_prob <- dataco_all_events_1516[, {
+  # Calculate the sum of the inverse odds (the bookmaker's margin or "vig")
+  vigpsc <- 1/PSCH + 1/PSCD + 1/PSCA
+  vigBbA <- 1/BbAvH + 1/BbAvD + 1/BbAvA
+  BbAvgoal<-1/`BbAv>2.5` + 1/`BbAv<2.5`
+  # Return a new list of columns containing the identifiers and the calculated probabilities
+  .(
+    match_id = match_id,
+    id = id,
+    PSCH_prob = (1/PSCH) / vigpsc,
+    PSCD_prob = (1/PSCD) / vigpsc,
+    PSCA_prob = (1/PSCA) / vigpsc,
+    BbAvH_prob = (1/BbAvH) / vigBbA,
+    BbAvD_prob = (1/BbAvD) / vigBbA,
+    BbAvA_prob = (1/BbAvA) / vigBbA,
+    `BbAv>2.5_prob` = (1/`BbAv>2.5`) / BbAvgoal,
+    `BbAv<2.5_prob` = (1/`BbAv<2.5`) / BbAvgoal
+  )
+}]
+
+
+# --- Verification Step ---
+# Add new columns that sum the probabilities for each set.
+# Note the backticks for the column names with special characters.
+dataco_all_events_1516_prob[, `:=` (
+  PSC_prob_sum = PSCH_prob + PSCD_prob + PSCA_prob,
+  BbAv_prob_sum = BbAvH_prob + BbAvD_prob + BbAvA_prob,
+  BbAv_OU_prob_sum = `BbAv>2.5_prob` + `BbAv<2.5_prob`
+)]
+
+# Display the head of the table including the new sum columns.
+# The values should be very close to 1.0.
+print("Displaying probability sums (should be 1.0):")
+print(head(dataco_all_events_1516_prob[, .(match_id, PSC_prob_sum, BbAv_prob_sum, BbAv_OU_prob_sum)]))
+
+# A more formal check for any significant deviation from 1
+# (allowing for tiny floating-point inaccuracies).
+mismatched_sums <- dataco_all_events_1516_prob[
+  abs(PSC_prob_sum - 1) > 1e-9 | 
+  abs(BbAv_prob_sum - 1) > 1e-9 |
+  abs(BbAv_OU_prob_sum - 1) > 1e-9
+]
+
+if (nrow(mismatched_sums) > 0) {
+  print("Warning: Found rows where probabilities do not sum to 1:")
+  print(mismatched_sums)
+} else {
+  print("Success: All probability sets correctly sum to 1.")
+}
+
+# Optional: Clean up the sum columns after verification
+dataco_all_events_1516_prob[, `:=` (
+  PSC_prob_sum = NULL, 
+  BbAv_prob_sum = NULL, 
+  BbAv_OU_prob_sum = NULL
+)]
+
+
+#write.csv(dataco_all_events_1516_prob, "dataco_all_events_1516_prob.csv", row.names = FALSE)
