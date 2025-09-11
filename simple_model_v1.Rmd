@@ -56,5 +56,5 @@ for (col in cols_to_round) {
 
 # Print the formatted table
 print(dataco_all_events_1516_fitprob_rounded)
-
+#write.csv(dataco_all_events_1516_fitprob, "dataco_all_events_1516_fitprob.csv", row.names = FALSE)
 #write.csv(dataco_all_events_1516_fitprob_rounded, "dataco_all_events_1516_fitprob_rounded.csv", row.names = FALSE)

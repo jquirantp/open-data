@@ -12,8 +12,8 @@ matches_info_1516 <- fread("matches_info_1516.csv")
 dataco_all_events <- fread("dataco_all_events.csv")
 dataco_all_events_1516_prob<- fread("dataco_all_events_1516_prob.csv")
 source('soccer-utility_prob_biv.R')
-
-
+# Order the data by match_id in ascending order
+setorder(dataco_all_events_1516_prob, match_id)
 
 
 # Run the fitting process using the NEW bivariate functions
@@ -37,7 +37,10 @@ dataco_all_events_1516_bivariate_fit <- dataco_all_events_1516_prob[, {
   
 }, by = .(match_id, id)]
 
-
+dataco_all_events_1516_bivariate_fit[, `:=` (
+  expH = (total_goals + supremacy) / 2,
+  expA = (total_goals - supremacy) / 2
+)]
 # Display the first few rows of the final table, rounded for readability.
 print("Optimized parameters for each match (rounded to 2 decimals):")
 
@@ -45,7 +48,7 @@ print("Optimized parameters for each match (rounded to 2 decimals):")
 dataco_all_events_1516_bivariate_fit_rounded <-dataco_all_events_1516_bivariate_fit
 
 # Identify the numeric columns to round (excluding id columns)
-cols_to_round <- c("total_goals", "supremacy", "draw_factor")
+cols_to_round <- c("total_goals", "supremacy", "phi","cov_lambda" ,"expH" ,"expA" )
 
 # Use a loop to round the specified columns by reference in the temporary table
 for (col in cols_to_round) {
@@ -56,3 +59,5 @@ for (col in cols_to_round) {
 print(dataco_all_events_1516_bivariate_fit_rounded)
 
 #write.csv(dataco_all_events_1516_bivariate_fit_rounded, "dataco_all_events_1516_bivariate_fit_rounded.csv", row.names = FALSE)
+#write.csv(dataco_all_events_1516_bivariate_fit, "dataco_all_events_1516_bivariate_fit.csv", row.names = FALSE)
+

@@ -1,0 +1,108 @@
+# Load libraries
+library(data.table)
+library(dplyr)
+
+source('soccer-utility_prob_biv.R')
+
+library(tidyverse) # Keep for potential data exploration, though not used in the main pipeline
+
+
+matches_info_1516 <- fread("matches_info_1516.csv")
+dataco_all_events_1516_bivariate_fit <- fread("dataco_all_events_1516_bivariate_fit.csv")
+dataco_all_events_1516_fitprob <- fread("dataco_all_events_1516_fitprob.csv")
+
+
+# --- 2. Prepare the Data ---
+
+# We need the actual scores from `matches_info`. Let's select only the necessary columns.
+actual_scores <- matches_info_1516[, .(match_id, home_score, away_score)]
+
+# Merge the actual scores with the predictions from each model
+# This ensures we align the correct scores with the correct model parameters for each match.
+
+# For the Independent Poisson model
+model1_data <- merge(dataco_all_events_1516_fitprob, actual_scores, by = "match_id")
+
+# For the Bivariate Poisson model
+model2_data <- merge(dataco_all_events_1516_bivariate_fit, actual_scores, by = "match_id")
+
+# Let's check the merged data to be sure
+print("Head of merged data for Independent Poisson Model:")
+print(head(model1_data))
+
+print("Head of merged data for Bivariate Poisson Model:")
+print(head(model2_data))
+# --- 3. Calculate Log-Likelihood for Model 1 (Dixon-Coles / "Poisson with Draw Factor") ---
+
+# THIS IS THE CORRECTED SECTION
+# We must generate the full probability matrix using the fitted parameters,
+# including the draw_factor, to get the true probability the model assigned to the score.
+
+model1_data[, log_likelihood := {
+  # For each row, generate the full, draw-adjusted probability matrix.
+  # The function is soccerutility.cs_poisson_df, and its third parameter is 'draw_factor'.
+  prob_matrix <- soccerutility.cs_poisson_df(total_goals, supremacy, draw_factor)
+  
+  # The actual score for this row
+  actual_home_goals <- home_score
+  actual_away_goals <- away_score
+  
+  # Find the probability the model assigned to the actual score.
+  # Add 1 because matrix indices are 1-based.
+  if (actual_home_goals < nrow(prob_matrix) && actual_away_goals < ncol(prob_matrix)) {
+    predicted_prob <- prob_matrix[actual_home_goals + 1, actual_away_goals + 1]
+  } else {
+    predicted_prob <- 1e-16 # Assign a tiny probability for very rare scores
+  }
+  
+  # Return the log of that probability.
+  log(predicted_prob + 1e-16)
+  
+}, by = 1:nrow(model1_data)] # Apply this logic row-by-row
+
+
+# Sum the log-likelihoods for all matches to get the total for the model
+total_loglik_model1 <- sum(model1_data$log_likelihood)
+
+print("Log-Likelihood calculation for Dixon-Coles model (first 5 rows):")
+print(head(model1_data[, .(match_id, home_score, away_score, total_goals, supremacy, draw_factor, log_likelihood)]))
+
+
+# --- 4. Calculate Log-Likelihood for Model 2 (Bivariate Poisson) ---
+# This section was already correct and does not need to be changed.
+
+model2_data[, log_likelihood := {
+  prob_matrix <- soccerutility.cs_bivariate_kn(total_goals, supremacy, phi, cov_lambda)
+  actual_home_goals <- home_score
+  actual_away_goals <- away_score
+  if (actual_home_goals < nrow(prob_matrix) && actual_away_goals < ncol(prob_matrix)) {
+    predicted_prob <- prob_matrix[actual_home_goals + 1, actual_away_goals + 1]
+  } else {
+    predicted_prob <- 1e-16
+  }
+  log(predicted_prob + 1e-16)
+}, by = 1:nrow(model2_data)]
+
+total_loglik_model2 <- sum(model2_data$log_likelihood, na.rm = TRUE)
+
+
+# --- Compare the Models ---
+cat("\n--- Model Evaluation Results (Corrected) ---\n")
+cat("Total Log-Likelihood for Dixon-Coles Model (Model 1):", total_loglik_model1, "\n")
+cat("Total Log-Likelihood for Bivariate Poisson Model (Model 2):", total_loglik_model2, "\n\n")
+
+# AIC Calculation (Optional but good practice)
+# Number of parameters: k1=3 for Dixon-Coles, k2=4 for Bivariate
+k1 <- 3
+k2 <- 4
+aic1 <- 2 * k1 - 2 * total_loglik_model1
+aic2 <- 2 * k2 - 2 * total_loglik_model2
+
+cat("AIC for Dixon-Coles Model:", aic1, "\n")
+cat("AIC for Bivariate Poisson Model:", aic2, "\n\n")
+
+if (aic2 < aic1) {
+  cat("Conclusion: The Bivariate Poisson model provides a better fit, even after penalizing for complexity.\n")
+} else {
+  cat("Conclusion: The Dixon-Coles model provides a better fit.\n")
+}

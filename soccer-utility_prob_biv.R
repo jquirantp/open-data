@@ -15,6 +15,16 @@ soccerutility.cs_bivariate_kn = function(tg, sup, phi, cov_lambda) {
   expH = (tg + sup) / 2
   expA = (tg - sup) / 2
   
+  # --- ADDED SAFEGUARD ---
+  # Ensure expected goals are never negative, which would cause dpois to return NaN.
+  # This handles edge cases from the optimizer.
+  if (expH < 0 || expA < 0) {
+    # If we get invalid parameters, return a matrix that will produce a large error,
+    # telling the optimizer this is a bad path.
+    # A uniform matrix is far from any real probability distribution.
+    return(matrix(1/((UPPER_GOALS+1)^2), nrow=UPPER_GOALS+1, ncol=UPPER_GOALS+1))
+  }
+  
   # Ensure covariance parameter is valid (cannot be negative or larger than the smallest mean)
   cov_lambda = max(0, min(cov_lambda, expH, expA))
   
@@ -76,14 +86,13 @@ soccerutility.target_bivariate_kn = function(params, cs_gn, hilo_line, tgts) {
   return(err)
 }
 
-# Fit wrapper for the 4-parameter Karlis-Ntzoufras model
+# Fit wrapper for the 4-parameter Karlis-Ntzoufras model (with CONSTRAINED OPTIMIZATION)
 soccerutility.fitWrapper_bivariate_kn = function(cs_gen, had, hilo, start = c(2.5, 0.1, 0.25, 0.1)) {
-  # Note the new 4-element start vector, with a guess for phi and cov_lambda
   
-  # The function to optimize now takes a 4-element vector 'p'
+  # The function to optimize remains the same
   fn_to_optimize = function(p) {
     # p[1]=tg, p[2]=sup, p[3]=phi, p[4]=cov_lambda
-    out = soccerutility.output_mkts(cs_gen, p[1], p[2], p[3], hilo_line = hilo[1], cov_lambda = p[4])
+    out = soccerutility.output_mkts(cs_gen, p[1], p[2], p[3], tgt_hilo = hilo[1], cov_lambda = p[4])
     err = sum(((out - tgts)^2))^0.5
     return(err)
   }
@@ -91,17 +100,24 @@ soccerutility.fitWrapper_bivariate_kn = function(cs_gen, had, hilo, start = c(2.
   # The targets vector remains the same
   tgts = c(had[1], had[2], had[3], hilo[2], hilo[3])
   
-  # We need to modify the output_mkts function signature to accept the extra parameter
-  # This is a bit of a workaround because optim doesn't pass extra args to cs_gn easily
-  body(soccerutility.output_mkts)[[2]] <- substitute(cs <- cs_gn(tg, sup, df, cov_lambda))
+  # --- NEW: Define Lower and Upper Bounds for the parameters ---
+  # This tells the optimizer to only search within a sensible range.
+  # Order: total_goals, supremacy, phi, cov_lambda
+  lower_bounds = c(0.1, -10, 0.01, 0)
+  upper_bounds = c(10,   10, 0.99, 5)
   
-  # Call optim with the new 4-parameter start vector
-  x = optim(start, fn = fn_to_optimize)
+  # --- MODIFIED: Call optim with the L-BFGS-B method and the bounds ---
+  x = optim(
+    par = start,
+    fn = fn_to_optimize,
+    method = "L-BFGS-B", # Use the constrained optimization method
+    lower = lower_bounds,
+    upper = upper_bounds
+  )
   
   # Return the 4 fitted parameters and the final error
   return(c(x$par, x$value))
 }
-
 
 
 
@@ -311,10 +327,21 @@ soccerutility.cs_binomial_drawfactor = function(tg,sup,df, TRIALS){
   
 }
 
-#returns an array of [home true,draw true, away true,hilo line, hilo under true, hilo over true]
-soccerutility.output_mkts = function(cs_gn,tg,sup,df,tgt_hilo){
-  cs = cs_gn(tg,sup,df)
+# --- REPLACEMENT for soccerutility.output_mkts ---
+# This new version handles both 3-parameter and 4-parameter models.
+soccerutility.output_mkts = function(cs_gn, tg, sup, df_or_phi, tgt_hilo, cov_lambda = NULL) {
   
+  # Check if this is a 4-parameter call (bivariate) or a 3-parameter call (poisson)
+  if (is.null(cov_lambda)) {
+    # This is a 3-parameter call, e.g., soccerutility.cs_poisson_df
+    cs = cs_gn(tg, sup, df_or_phi)
+  } else {
+    # This is a 4-parameter call for the bivariate model.
+    # The 3rd parameter 'df_or_phi' is now interpreted as 'phi'.
+    cs = cs_gn(tg, sup, df_or_phi, cov_lambda)
+  }
+  
+  # The rest of the function is the same
   #had
   h = sum(cs[lower.tri(cs)])
   a = sum(cs[upper.tri(cs)])
