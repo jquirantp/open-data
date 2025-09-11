@@ -11,17 +11,32 @@ all_events_1516_renormalized <- fread("all_events_1516_renormalized.csv")
 matches_info_1516 <- fread("matches_info_1516.csv")
 dataco_all_events <- fread("dataco_all_events.csv")
 dataco_all_events_1516_prob<- fread("dataco_all_events_1516_prob.csv")
-source('soccer-utility_prob.R')
+source('soccer-utility.R')
 
+dataco_all_events_1516_odd <- dataco_all_events_1516_prob[, .(
+  # Keep the identifier columns
+  match_id,
+  id,
+  
+  # Convert probability columns to odds (1 / probability)
+  PSCH_odd = 1 / PSCH_prob,
+  PSCD_odd = 1 / PSCD_prob,
+  PSCA_odd = 1 / PSCA_prob,
+  BbAvH_odd = 1 / BbAvH_prob,
+  BbAvD_odd = 1 / BbAvD_prob,
+  BbAvA_odd = 1 / BbAvA_prob,
+  `BbAv>2.5_odd` = 1 / `BbAv>2.5_prob`, # Use backticks for special characters
+  `BbAv<2.5_odd` = 1 / `BbAv<2.5_prob`
+)]
 #Using two independent poisson distributions
 # Use the data.table approach to apply the fitWrapper function to each row.
-dataco_all_events_1516_fitprob <- dataco_all_events_1516_prob[, {
+dataco_all_events_1516_fit <- dataco_all_events_1516_odd[, {
   
   # Call the fitWrapper function once for the current row
   params <- soccerutility.fitWrapper(
     cs_gen = soccerutility.cs_poisson_df,
-    had = c(PSCH_prob, PSCD_prob, PSCA_prob),
-    hilo = c(2.5, `BbAv<2.5_prob`, `BbAv>2.5_prob`)
+    had = c(PSCH_odd, PSCD_odd, PSCA_odd),
+    hilo = c(2.5, `BbAv<2.5_odd`, `BbAv>2.5_odd`)
   )
   
   # Return a list where each element is a single value.
@@ -34,7 +49,7 @@ dataco_all_events_1516_fitprob <- dataco_all_events_1516_prob[, {
   )
   
 }, by = .(match_id, id)] # Group by match_id and id to process each row individually.
-dataco_all_events_1516_fitprob[, `:=` (
+dataco_all_events_1516_fit[, `:=` (
   expH = (total_goals + supremacy) / 2,
   expA = (total_goals - supremacy) / 2
 )]
@@ -44,17 +59,18 @@ dataco_all_events_1516_fitprob[, `:=` (
 print("Optimized parameters for each match (rounded to 2 decimals):")
 
 # Take the head of the results to create a temporary table for printing
-dataco_all_events_1516_fitprob_rounded <-dataco_all_events_1516_fitprob
+dataco_all_events_1516_fit_rounded <-dataco_all_events_1516_fit
 
 # Identify the numeric columns to round (excluding id columns)
 cols_to_round <- c("total_goals", "supremacy", "draw_factor")
 
 # Use a loop to round the specified columns by reference in the temporary table
 for (col in cols_to_round) {
-  dataco_all_events_1516_fitprob_rounded[, (col) := round(get(col), 2)]
+  dataco_all_events_1516_fit_rounded[, (col) := round(get(col), 2)]
 }
 
 # Print the formatted table
-print(dataco_all_events_1516_fitprob_rounded)
+print(dataco_all_events_1516_fit_rounded)
 
-#write.csv(dataco_all_events_1516_fitprob_rounded, "dataco_all_events_1516_fitprob_rounded.csv", row.names = FALSE)
+
+#write.csv(dataco_all_events_1516_fit_rounded, "dataco_all_events_1516_fit_rounded.csv", row.names = FALSE)

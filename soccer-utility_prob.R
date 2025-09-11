@@ -208,8 +208,7 @@ soccerutility.output_mkts = function(cs_gn,tg,sup,df,tgt_hilo){
   #hilo
   u = soccerutility.hilo_under(cs,tgt_hilo)
   
-  return(c(1/h,1/d,1/a,1/u,1/(1-u)))
-  
+  return(c(h, d, a, u, 1 - u))  
 }
 
 soccerutility.translate_for_goal = function(cs_matrix,score){
@@ -222,7 +221,7 @@ soccerutility.translate_for_goal = function(cs_matrix,score){
     ncol=c1,
     data = 0);
   x[((1+score[1]):r1),((1+score[2]):c1)] = cs_matrix;
-    
+  
   x;
   
 }
@@ -242,7 +241,7 @@ soccerutility.output_mkts_inplay = function(cs_gn,tg,sup,df,tgt_hilos,score){
   nts_h = (((tg + sup) / 2) / tg ) * (1 - nts_n);
   nts_a = 1 - nts_n - nts_h;
   
-
+  
   # dictionary;
   ret = list()
   ret[['HAD']] = list('1'=1/h,'2'=1/a,'X'=1/d);
@@ -250,24 +249,24 @@ soccerutility.output_mkts_inplay = function(cs_gn,tg,sup,df,tgt_hilos,score){
   
   #hilo
   for(i in 1:length(tgt_hilos)){
-  u = soccerutility.hilo_under_detail(cs,tgt_hilos[i])
-  ret[[paste0('HILO:',tgt_hilos[i])]] = list('L'=1/u[[1]][1],'H'=1/(1-u[[1]][1]),'D'=u[[2]][2])
+    u = soccerutility.hilo_under_detail(cs,tgt_hilos[i])
+    ret[[paste0('HILO:',tgt_hilos[i])]] = list('L'=1/u[[1]][1],'H'=1/(1-u[[1]][1]),'D'=u[[2]][2])
   }
   
   #crs;
   scrs = list(
     c(1,0),
-      c(2,0),
-        c(2,1),	
-          c(3,0),
-            c(3,1),			
-              c(3,2),	
-                c(4,0),	
-                  c(4,1),	
-                    c(4,2),	
-                      c(5,0),	
-                        c(5,1),	
-                          c(5,2))	
+    c(2,0),
+    c(2,1),	
+    c(3,0),
+    c(3,1),			
+    c(3,2),	
+    c(4,0),	
+    c(4,1),	
+    c(4,2),	
+    c(5,0),	
+    c(5,1),	
+    c(5,2))	
   cs_h=0;
   cs_d=0;
   cs_a=0;
@@ -327,35 +326,35 @@ soccerutility.hilo_under = function(cs,line){
   lineid = as.integer(line / 0.25) %% 4
   
   if(lineid == 0){
-           
-           u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line)])
-           d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
-           x = u / (u + (1 - d - u))
-           
-         }
+    
+    u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line)])
+    d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
+    x = u / (u + (1 - d - u))
+    
+  }
   else if(lineid == 1){
-                    
-           u = sum(cs[(row(cs) + col(cs) - 2) <  as.integer(line)])
-           d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
-           x = (u + d / 2.0) / (1.0 - d / 2.0)         
-           
-         }
+    
+    u = sum(cs[(row(cs) + col(cs) - 2) <  as.integer(line)])
+    d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
+    x = (u + d / 2.0) / (1.0 - d / 2.0)         
+    
+  }
   else if(lineid == 2){
-                    
-           u = sum(cs[(row(cs) + col(cs) - 2) <=  as.integer(line)])
-           x = u
-           
-         }
+    
+    u = sum(cs[(row(cs) + col(cs) - 2) <=  as.integer(line)])
+    x = u
+    
+  }
   else{
-           
-           u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line) + 1])
-           d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line) + 1])   
-           x = u / (1 - d / 2.0)    
-           
-         }  
+    
+    u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line) + 1])
+    d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line) + 1])   
+    x = u / (1 - d / 2.0)    
+    
+  }  
   
   return (x)     
-    
+  
 }
 
 soccerutility.hilo_under_detail = function(cs,line){
@@ -391,7 +390,7 @@ soccerutility.hilo_under_detail = function(cs,line){
   }  
   if(!exists('d')){
     d = 0.0;
-    }
+  }
   return (list(x,c(u,d,1-u-d)))
   
 }
@@ -401,22 +400,22 @@ soccerutility.hilo_under_simple = function(u,d,h,line)
   lineid = as.integer(line / 0.25) %% 4
   
   if(lineid == 0){
-        
+    
     x = u / (u + (1 - d - u))
     
   }
   else if(lineid == 1){
-       
+    
     x = (u + d / 2.0) / (1.0 - d / 2.0)         
     
   }
   else if(lineid == 2){
-       
+    
     x = u
     
   }
   else{
-      
+    
     x = u / (1 - d / 2.0)    
     
   }  
@@ -441,11 +440,11 @@ soccerutility.hcp_home = function(cs,line){
   else if(lineid == 1){
     
     if(line > 0){
-    
+      
       d = sum(off.diag(cs,(as.integer(line - 0.25))))
       h = sum(off.diag.seg(cs,((as.integer(line - 0.25))) - 1))
       x = (h + d / 2.0) / (1.0 - d / 2.0)         
-    
+      
     }
     else{      
       
@@ -464,11 +463,11 @@ soccerutility.hcp_home = function(cs,line){
   else{
     
     if(line > 0){
-    
+      
       d = sum(off.diag(cs,(as.integer(line + 0.25))))  
       h = sum(off.diag.seg(cs,((as.integer(line + 0.25))) - 1))   
       x = h / (1 - d / 2.0) 
-    
+      
     }else{
       
       d = sum(off.diag(cs,(as.integer(line - 0.25))))
@@ -477,7 +476,7 @@ soccerutility.hcp_home = function(cs,line){
       
       
     }  
-  
+    
   }  
   
   return (x)     
@@ -602,7 +601,7 @@ soccerutility.fix_par_to_df = function(tg0,sup0,df0,df_tgt){
             df_fix=df_tgt,
             tgts=fix,control=list(maxit=10000))
   return(c(x$par[1],x$par[2],df_tgt))
-    
+  
 }
 
 

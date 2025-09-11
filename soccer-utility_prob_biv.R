@@ -1,3 +1,118 @@
+# --- Karlis & Ntzoufras (2003) Bivariate Poisson with Mixture Draw Inflation ---
+
+# tg: Total Goals parameter
+# sup: Supremacy parameter
+# phi: The mixture parameter for draws (probability of a draw occurring)
+# cov_lambda: The covariance parameter (lambda3 from the paper)
+soccerutility.cs_bivariate_kn = function(tg, sup, phi, cov_lambda) {
+  
+  # Define the maximum number of goals for the matrix
+  UPPER_GOALS = 15
+  
+  # --- 1. Generate the base (non-inflated) Bivariate Poisson Matrix ---
+  
+  # Calculate expected goals for home (expH) and away (expA)
+  expH = (tg + sup) / 2
+  expA = (tg - sup) / 2
+  
+  # Ensure covariance parameter is valid (cannot be negative or larger than the smallest mean)
+  cov_lambda = max(0, min(cov_lambda, expH, expA))
+  
+  # Calculate the underlying independent Poisson means (lambda1, lambda2, lambda3)
+  lambda1 = expH - cov_lambda
+  lambda2 = expA - cov_lambda
+  lambda3 = cov_lambda
+  
+  # Create an empty matrix for the base probabilities
+  base_mat = matrix(0, nrow = UPPER_GOALS + 1, ncol = UPPER_GOALS + 1)
+  
+  # Loop through each possible score (x, y) to calculate its probability
+  for (x in 0:UPPER_GOALS) {
+    for (y in 0:UPPER_GOALS) {
+      min_xy = min(x, y)
+      # Calculate P(X=x, Y=y) using the sum formula from the paper
+      prob_sum = sum(dpois(x - 0:min_xy, lambda1) * dpois(y - 0:min_xy, lambda2) * dpois(0:min_xy, lambda3))
+      base_mat[x + 1, y + 1] = prob_sum
+    }
+  }
+  
+  # Renormalise the base matrix to ensure it sums to 1
+  base_mat = base_mat / sum(base_mat)
+  
+  # --- 2. Apply the Mixture Model for Draw Inflation ---
+  
+  # Calculate the total probability of a draw in the base matrix
+  p_draw_vanilla = sum(diag(base_mat))
+  
+  # Create the final matrix that will hold the inflated probabilities
+  final_mat = base_mat # Start with a copy
+  
+  # The mixture parameter 'phi' must be between 0 and 1
+  phi = max(0, min(1, phi))
+  
+  # Apply the mixture model formula from the paper
+  if (p_draw_vanilla > 0 && p_draw_vanilla < 1) {
+    # Inflate the diagonal (draws)
+    # P_inflated(k,k) = phi * P_base(k,k) / P_base(any draw)
+    diag(final_mat) = phi * diag(base_mat) / p_draw_vanilla
+    
+    # Deflate the off-diagonals (wins/losses)
+    # P_inflated(x,y) = (1-phi) * P_base(x,y) / P_base(any non-draw)
+    final_mat[lower.tri(final_mat)] = (1 - phi) * base_mat[lower.tri(base_mat)] / (1 - p_draw_vanilla)
+    final_mat[upper.tri(final_mat)] = (1 - phi) * base_mat[upper.tri(base_mat)] / (1 - p_draw_vanilla)
+  }
+  
+  # Return the final, draw-adjusted matrix
+  return(final_mat)
+}
+
+
+
+# Target function for the 4-parameter Karlis-Ntzoufras model
+soccerutility.target_bivariate_kn = function(params, cs_gn, hilo_line, tgts) {
+  # params is a vector: [tg, sup, phi, cov_lambda]
+  out = soccerutility.output_mkts(cs_gn, params[1], params[2], params[3], hilo_line, cov_lambda = params[4])
+  err = sum(((out - tgts)^2))^0.5
+  return(err)
+}
+
+# Fit wrapper for the 4-parameter Karlis-Ntzoufras model
+soccerutility.fitWrapper_bivariate_kn = function(cs_gen, had, hilo, start = c(2.5, 0.1, 0.25, 0.1)) {
+  # Note the new 4-element start vector, with a guess for phi and cov_lambda
+  
+  # The function to optimize now takes a 4-element vector 'p'
+  fn_to_optimize = function(p) {
+    # p[1]=tg, p[2]=sup, p[3]=phi, p[4]=cov_lambda
+    out = soccerutility.output_mkts(cs_gen, p[1], p[2], p[3], hilo_line = hilo[1], cov_lambda = p[4])
+    err = sum(((out - tgts)^2))^0.5
+    return(err)
+  }
+  
+  # The targets vector remains the same
+  tgts = c(had[1], had[2], had[3], hilo[2], hilo[3])
+  
+  # We need to modify the output_mkts function signature to accept the extra parameter
+  # This is a bit of a workaround because optim doesn't pass extra args to cs_gn easily
+  body(soccerutility.output_mkts)[[2]] <- substitute(cs <- cs_gn(tg, sup, df, cov_lambda))
+  
+  # Call optim with the new 4-parameter start vector
+  x = optim(start, fn = fn_to_optimize)
+  
+  # Return the 4 fitted parameters and the final error
+  return(c(x$par, x$value))
+}
+
+
+
+
+
+
+
+
+
+
+
+
 #poisson Matrix
 soccerutility.cs_poisson_df = function(tg,sup,df)
 {
@@ -208,8 +323,7 @@ soccerutility.output_mkts = function(cs_gn,tg,sup,df,tgt_hilo){
   #hilo
   u = soccerutility.hilo_under(cs,tgt_hilo)
   
-  return(c(1/h,1/d,1/a,1/u,1/(1-u)))
-  
+  return(c(h, d, a, u, 1 - u))  
 }
 
 soccerutility.translate_for_goal = function(cs_matrix,score){
@@ -222,7 +336,7 @@ soccerutility.translate_for_goal = function(cs_matrix,score){
     ncol=c1,
     data = 0);
   x[((1+score[1]):r1),((1+score[2]):c1)] = cs_matrix;
-    
+  
   x;
   
 }
@@ -242,7 +356,7 @@ soccerutility.output_mkts_inplay = function(cs_gn,tg,sup,df,tgt_hilos,score){
   nts_h = (((tg + sup) / 2) / tg ) * (1 - nts_n);
   nts_a = 1 - nts_n - nts_h;
   
-
+  
   # dictionary;
   ret = list()
   ret[['HAD']] = list('1'=1/h,'2'=1/a,'X'=1/d);
@@ -250,24 +364,24 @@ soccerutility.output_mkts_inplay = function(cs_gn,tg,sup,df,tgt_hilos,score){
   
   #hilo
   for(i in 1:length(tgt_hilos)){
-  u = soccerutility.hilo_under_detail(cs,tgt_hilos[i])
-  ret[[paste0('HILO:',tgt_hilos[i])]] = list('L'=1/u[[1]][1],'H'=1/(1-u[[1]][1]),'D'=u[[2]][2])
+    u = soccerutility.hilo_under_detail(cs,tgt_hilos[i])
+    ret[[paste0('HILO:',tgt_hilos[i])]] = list('L'=1/u[[1]][1],'H'=1/(1-u[[1]][1]),'D'=u[[2]][2])
   }
   
   #crs;
   scrs = list(
     c(1,0),
-      c(2,0),
-        c(2,1),	
-          c(3,0),
-            c(3,1),			
-              c(3,2),	
-                c(4,0),	
-                  c(4,1),	
-                    c(4,2),	
-                      c(5,0),	
-                        c(5,1),	
-                          c(5,2))	
+    c(2,0),
+    c(2,1),	
+    c(3,0),
+    c(3,1),			
+    c(3,2),	
+    c(4,0),	
+    c(4,1),	
+    c(4,2),	
+    c(5,0),	
+    c(5,1),	
+    c(5,2))	
   cs_h=0;
   cs_d=0;
   cs_a=0;
@@ -327,35 +441,35 @@ soccerutility.hilo_under = function(cs,line){
   lineid = as.integer(line / 0.25) %% 4
   
   if(lineid == 0){
-           
-           u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line)])
-           d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
-           x = u / (u + (1 - d - u))
-           
-         }
+    
+    u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line)])
+    d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
+    x = u / (u + (1 - d - u))
+    
+  }
   else if(lineid == 1){
-                    
-           u = sum(cs[(row(cs) + col(cs) - 2) <  as.integer(line)])
-           d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
-           x = (u + d / 2.0) / (1.0 - d / 2.0)         
-           
-         }
+    
+    u = sum(cs[(row(cs) + col(cs) - 2) <  as.integer(line)])
+    d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line)])   
+    x = (u + d / 2.0) / (1.0 - d / 2.0)         
+    
+  }
   else if(lineid == 2){
-                    
-           u = sum(cs[(row(cs) + col(cs) - 2) <=  as.integer(line)])
-           x = u
-           
-         }
+    
+    u = sum(cs[(row(cs) + col(cs) - 2) <=  as.integer(line)])
+    x = u
+    
+  }
   else{
-           
-           u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line) + 1])
-           d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line) + 1])   
-           x = u / (1 - d / 2.0)    
-           
-         }  
+    
+    u = sum(cs[(row(cs) + col(cs) - 2)  <  as.integer(line) + 1])
+    d = sum(cs[(row(cs) + col(cs) - 2) ==  as.integer(line) + 1])   
+    x = u / (1 - d / 2.0)    
+    
+  }  
   
   return (x)     
-    
+  
 }
 
 soccerutility.hilo_under_detail = function(cs,line){
@@ -391,7 +505,7 @@ soccerutility.hilo_under_detail = function(cs,line){
   }  
   if(!exists('d')){
     d = 0.0;
-    }
+  }
   return (list(x,c(u,d,1-u-d)))
   
 }
@@ -401,22 +515,22 @@ soccerutility.hilo_under_simple = function(u,d,h,line)
   lineid = as.integer(line / 0.25) %% 4
   
   if(lineid == 0){
-        
+    
     x = u / (u + (1 - d - u))
     
   }
   else if(lineid == 1){
-       
+    
     x = (u + d / 2.0) / (1.0 - d / 2.0)         
     
   }
   else if(lineid == 2){
-       
+    
     x = u
     
   }
   else{
-      
+    
     x = u / (1 - d / 2.0)    
     
   }  
@@ -441,11 +555,11 @@ soccerutility.hcp_home = function(cs,line){
   else if(lineid == 1){
     
     if(line > 0){
-    
+      
       d = sum(off.diag(cs,(as.integer(line - 0.25))))
       h = sum(off.diag.seg(cs,((as.integer(line - 0.25))) - 1))
       x = (h + d / 2.0) / (1.0 - d / 2.0)         
-    
+      
     }
     else{      
       
@@ -464,11 +578,11 @@ soccerutility.hcp_home = function(cs,line){
   else{
     
     if(line > 0){
-    
+      
       d = sum(off.diag(cs,(as.integer(line + 0.25))))  
       h = sum(off.diag.seg(cs,((as.integer(line + 0.25))) - 1))   
       x = h / (1 - d / 2.0) 
-    
+      
     }else{
       
       d = sum(off.diag(cs,(as.integer(line - 0.25))))
@@ -477,7 +591,7 @@ soccerutility.hcp_home = function(cs,line){
       
       
     }  
-  
+    
   }  
   
   return (x)     
@@ -602,7 +716,7 @@ soccerutility.fix_par_to_df = function(tg0,sup0,df0,df_tgt){
             df_fix=df_tgt,
             tgts=fix,control=list(maxit=10000))
   return(c(x$par[1],x$par[2],df_tgt))
-    
+  
 }
 
 

@@ -11,50 +11,48 @@ all_events_1516_renormalized <- fread("all_events_1516_renormalized.csv")
 matches_info_1516 <- fread("matches_info_1516.csv")
 dataco_all_events <- fread("dataco_all_events.csv")
 dataco_all_events_1516_prob<- fread("dataco_all_events_1516_prob.csv")
-source('soccer-utility_prob.R')
+source('soccer-utility_prob_biv.R')
 
-#Using two independent poisson distributions
-# Use the data.table approach to apply the fitWrapper function to each row.
-dataco_all_events_1516_fitprob <- dataco_all_events_1516_prob[, {
+
+
+
+# Run the fitting process using the NEW bivariate functions
+dataco_all_events_1516_bivariate_fit <- dataco_all_events_1516_prob[, {
   
-  # Call the fitWrapper function once for the current row
-  params <- soccerutility.fitWrapper(
-    cs_gen = soccerutility.cs_poisson_df,
+  # Call the NEW bivariate fitWrapper
+  params <- soccerutility.fitWrapper_bivariate_kn(
+    cs_gen = soccerutility.cs_bivariate_kn, # Use the new score generator
     had = c(PSCH_prob, PSCD_prob, PSCA_prob),
     hilo = c(2.5, `BbAv<2.5_prob`, `BbAv>2.5_prob`)
   )
   
-  # Return a list where each element is a single value.
-  # This ensures one output row is created for each input row.
+  # Assign the 5 returned values to their respective columns
   list(
     total_goals = params[1],
     supremacy = params[2],
-    draw_factor = params[3],
-    fit_error = params[4] # Capture the 4th value as the error
+    phi = params[3],         # The new draw mixture parameter
+    cov_lambda = params[4],  # The new covariance parameter
+    fit_error = params[5]    # The final error value
   )
   
-}, by = .(match_id, id)] # Group by match_id and id to process each row individually.
-dataco_all_events_1516_fitprob[, `:=` (
-  expH = (total_goals + supremacy) / 2,
-  expA = (total_goals - supremacy) / 2
-)]
-# --- Formatted Display ---
+}, by = .(match_id, id)]
+
 
 # Display the first few rows of the final table, rounded for readability.
 print("Optimized parameters for each match (rounded to 2 decimals):")
 
 # Take the head of the results to create a temporary table for printing
-dataco_all_events_1516_fitprob_rounded <-dataco_all_events_1516_fitprob
+dataco_all_events_1516_bivariate_fit_rounded <-dataco_all_events_1516_bivariate_fit
 
 # Identify the numeric columns to round (excluding id columns)
 cols_to_round <- c("total_goals", "supremacy", "draw_factor")
 
 # Use a loop to round the specified columns by reference in the temporary table
 for (col in cols_to_round) {
-  dataco_all_events_1516_fitprob_rounded[, (col) := round(get(col), 2)]
+  dataco_all_events_1516_bivariate_fit_rounded[, (col) := round(get(col), 2)]
 }
 
 # Print the formatted table
-print(dataco_all_events_1516_fitprob_rounded)
+print(dataco_all_events_1516_bivariate_fit_rounded)
 
-#write.csv(dataco_all_events_1516_fitprob_rounded, "dataco_all_events_1516_fitprob_rounded.csv", row.names = FALSE)
+#write.csv(dataco_all_events_1516_bivariate_fit_rounded, "dataco_all_events_1516_bivariate_fit_rounded.csv", row.names = FALSE)
