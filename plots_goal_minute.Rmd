@@ -1,0 +1,139 @@
+# Load libraries
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+
+library(plotly)
+
+
+
+
+matches <- fread("matches_info_1516.csv")
+dataco <- fread("dataco_all_events_1516_fitprob.csv")
+events <- fread("all_events_1516_renormalized.csv")
+statsr <- fread("stats_minute_1516_renormalized.csv")
+stats <- fread("stats_minute_1516.csv")
+
+# RENORMALIZED
+total_goal_counts_r <- statsr %>%
+  group_by(period, minute) %>%
+  summarise(
+    total_goals = sum(home_goal_now) + sum(away_goal_now),
+    .groups = 'drop'
+  ) %>%
+  mutate(type = "RENORMALIZED")
+
+# NON-RENORMALIZED
+total_goal_counts_nr <- stats %>%
+  group_by(period, minute) %>%
+  summarise(
+    total_goals = sum(home_goal_now) + sum(away_goal_now),
+    .groups = 'drop'
+  ) %>%
+  mutate(type = "NON-RENORMALIZED")
+  
+total_goal_counts <- bind_rows(total_goal_counts_r, total_goal_counts_nr)
+# 1) new legend variable (stable labels)
+total_goal_counts <- total_goal_counts %>%
+  mutate(plot_group = factor(
+           paste0("Period ", period, " - ",
+                  ifelse(type == "RENORMALIZED", "Renormalized", "Non-Renormalized")),
+           levels = c("Period 1 - Renormalized",
+                      "Period 2 - Renormalized",
+                      "Period 1 - Non-Renormalized",
+                      "Period 2 - Non-Renormalized")
+         ))
+
+# 2) plot using the new legend variable
+p <- ggplot(total_goal_counts, aes(x = minute, y = total_goals,
+                                   color = plot_group,
+                                   shape = type)) +
+  geom_point(size = 2) +
+  labs(
+    title = "Total Goals vs. Minute",
+    x = "Minute",
+    y = "Total Goals",
+    color = "Period & Type",
+    shape = "Dataset"
+  ) +
+  theme_minimal() +
+  scale_color_manual(
+    values = c(
+      "Period 1 - Renormalized" = "blue",
+      "Period 2 - Renormalized" = "red",
+      "Period 1 - Non-Renormalized" = "darkgreen",
+      "Period 2 - Non-Renormalized" = "orange"
+    )
+  ) +
+  scale_shape_manual(values = c("RENORMALIZED" = 16, "NON-RENORMALIZED" = 17))
+
+ggplotly(p)
+
+
+
+##### PROBABILITIES INSTEAD OF TOTAL GOALS
+# --- RENORMALIZED ---
+goal_probs_r <- statsr %>%
+  group_by(period, minute) %>%
+  summarise(
+    total_goals = sum(home_goal_now) + sum(away_goal_now),
+    total_obs = n(),   # all matches have every minute
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    goal_prob = total_goals / total_obs,
+    type = "RENORMALIZED"
+  )
+
+# --- NON-RENORMALIZED ---
+goal_probs_nr <- stats %>%
+  group_by(period, minute) %>%
+  summarise(
+    total_goals = sum(home_goal_now) + sum(away_goal_now),
+    total_obs = n(),   # varies by minute, esp. in extra time
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    goal_prob = total_goals / total_obs,
+    type = "NON-RENORMALIZED"
+  )
+
+# Combine
+goal_probs <- bind_rows(goal_probs_r, goal_probs_nr)
+
+# Stable legend variable
+goal_probs <- goal_probs %>%
+  mutate(plot_group = factor(
+    paste0("Period ", period, " - ",
+           ifelse(type == "RENORMALIZED", "Renormalized", "Non-Renormalized")),
+    levels = c("Period 1 - Renormalized",
+               "Period 2 - Renormalized",
+               "Period 1 - Non-Renormalized",
+               "Period 2 - Non-Renormalized")
+  ))
+
+# Plot probabilities
+p <- ggplot(goal_probs, aes(x = minute, y = goal_prob,
+                            color = plot_group,
+                            shape = type)) +
+  geom_point(size = 2) +
+  labs(
+    title = "Probability of a Goal vs. Minute",
+    x = "Minute",
+    y = "Goal Probability",
+    color = "Period & Type",
+    shape = "Dataset"
+  ) +
+  theme_minimal() +
+  scale_color_manual(
+    values = c(
+      "Period 1 - Renormalized" = "blue",
+      "Period 2 - Renormalized" = "red",
+      "Period 1 - Non-Renormalized" = "darkgreen",
+      "Period 2 - Non-Renormalized" = "orange"
+    )
+  ) +
+  scale_shape_manual(values = c("RENORMALIZED" = 16, "NON-RENORMALIZED" = 17))
+
+ggplotly(p)
