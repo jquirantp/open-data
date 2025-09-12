@@ -150,111 +150,89 @@ print(paste("Found", nrow(mismatches), "mismatched scores."))
 ########################## ########################## ########################## ########################## ########################## ########################## 
 ########################## Rescaling the data: from 0 to 45 and from 45 to 90  ########################## ########################## ########################## 
 ########################## ########################## ########################## ########################## ########################## ########################## 
-# --- Renormalize Event Timestamps ---
 
-# Step 1: Create a copy to work on, preserving the original data
+
+# --- 1. Renormalize Event Timestamps (Corrected Logic) ---
+
+# Step 1.1: Find the TRUE end time (in total seconds) for each half from the ORIGINAL data.
+# We use the original `all_events_1516` to ensure we get the real stoppage time.
+true_end_times <- all_events_1516[
+  type.name == "Half End",
+  .(true_half_end_seconds = max(minute * 60 + second)),
+  by = .(match_id, period)
+]
+
+# Step 1.2: Create a fresh copy of the events data for renormalization.
 all_events_1516_renormalized <- copy(all_events_1516)
 
-# Step 2: Merge the actual end times onto the events table.
-# This gives each event row access to its half's actual end time.
-all_events_1516_renormalized <- merge(all_events_1516_renormalized, end_times_per_match, by = c("match_id", "period"))
+# Step 1.3: Merge these true end times onto our new table.
+all_events_1516_renormalized <- merge(all_events_1516_renormalized, true_end_times, by = c("match_id", "period"))
 
-# Step 3: Calculate the new, renormalized minute and second.
-# We do this by reference for efficiency using `:=`.
-all_events_1516_renormalized[, `:=` (
-  # Convert all times to total seconds from the start of the match for calculation
-  event_total_seconds = minute * 60 + second,
-  half_end_total_seconds = end_minute * 60 + end_second
-)]
-
-# Step 4: Apply the scaling logic differently for each period.
-
-# For Period 1: Scale the event's time into a 0-2700 second range (0-45 mins)
-all_events_1516_renormalized[period == 1, 
-  renormalized_total_seconds := (event_total_seconds / half_end_total_seconds) * (45 * 60)
-]
-
-# For Period 2:
-# - Calculate the time elapsed since the start of the 2nd half (45:00).
-# - Calculate the total duration of the 2nd half.
-# - Scale the elapsed time and add it back to the 45-minute mark.
-all_events_1516_renormalized[period == 2, 
-  renormalized_total_seconds := {
-    time_in_half = event_total_seconds - (45 * 60)
-    duration_of_half = half_end_total_seconds - (45 * 60)
+# Step 1.4: Calculate the renormalized time in total seconds.
+all_events_1516_renormalized[, renormalized_total_seconds := {
+  # Get the event's time in total seconds from the start of the match.
+  event_total_seconds <- minute * 60 + second
+  
+  # Apply scaling logic based on the period.
+  if (period == 1) {
+    # For P1, scale the event's time based on the half's true duration.
+    # Handle the edge case where a half has zero duration to avoid division by zero.
+    ifelse(true_half_end_seconds > 0,
+           (event_total_seconds / true_half_end_seconds) * (45 * 60),
+           0)
+  } else { # period == 2
+    # For P2, calculate time elapsed within the second half.
+    time_in_p2 <- event_total_seconds - (45 * 60)
+    duration_of_p2 <- true_half_end_seconds - (45 * 60)
     
-    # FIX: Use ifelse() for vectorized conditional logic.
-    # This checks each row's duration_of_half individually.
-    scaled_time_in_half = ifelse(duration_of_half > 0, (time_in_half / duration_of_half) * (45 * 60), 0)
-    
-    (45 * 60) + scaled_time_in_half
+    # Scale the time within P2 and add it back to the 45-minute mark.
+    scaled_time_in_p2 <- ifelse(duration_of_p2 > 0,
+                                (time_in_p2 / duration_of_p2) * (45 * 60),
+                                0)
+    (45 * 60) + scaled_time_in_p2
   }
-]
+}, by = 1:nrow(all_events_1516_renormalized)] # Apply row-by-row
 
-# Step 5: Convert the renormalized total seconds back into minute and second columns.
+# Step 1.5: Convert renormalized seconds back to minute and second columns.
+# We also rename the original time columns to avoid confusion.
 all_events_1516_renormalized[, `:=` (
-  renormalized_minute = floor(renormalized_total_seconds / 60),
-  renormalized_second = floor(renormalized_total_seconds %% 60)
+  true_minute = minute,
+  true_second = second,
+  minute = floor(renormalized_total_seconds / 60),
+  second = floor(renormalized_total_seconds %% 60)
 )]
 
-# Step 6: Clean up intermediate columns and view the result.
+# Step 1.6: Clean up intermediate columns.
 all_events_1516_renormalized[, `:=` (
-  event_total_seconds = NULL,
-  half_end_total_seconds = NULL,
-  end_minute = NULL,
-  end_second = NULL
+  true_half_end_seconds = NULL,
+  renormalized_total_seconds = NULL
 )]
 
 
-# Use setnames() to efficiently rename the columns by reference
-setnames(all_events_1516_renormalized, 
-         old = c("minute", "second", "renormalized_minute", "renormalized_second"), 
-         new = c("true_minute", "true_second", "minute", "second"))
-         
-         
+# --- 2. Build a FIXED Minute-by-Minute Timeline for Renormalized Data ---
 
-# --- 2. Build a Robust Minute-by-Minute Timeline ---
-### It calculates stoppage time *per match* to avoid data loss or creating phantom minutes.
-
-# 2a. Find the actual end minute for each half of EACH match
-end_times_per_match <- all_events_1516_renormalized[
-  type.name == "Half End",
-  .SD[which.max(minute)], # Select the entire row with the max minute for the group
-  by = .(match_id, period)
-][, .(match_id, period, end_minute = minute, end_second = second)] # Select and rename the desired columns
-
-# 2b. Get the base match info needed for the timeline
+# 2.1: Get the base match info needed for the timeline
 base_match_data <- unique(matches_info_1516[, .(
   match_id,
   home_team_name = home_team.home_team_name,
   away_team_name = away_team.away_team_name
 )])
 
-# 2c. Join the end times to the match data
-match_timings <- end_times_per_match[base_match_data, on = "match_id"]
+# 2.2: Generate a FIXED timeline from 0-90 for all matches using a cross join (CJ).
+# This is the standard, correct way to create a timeline for renormalized data.
+stats_minute_1516_renormalized <- CJ(
+  match_id = base_match_data$match_id,
+  minute = 0:90,
+  sorted = FALSE # We will sort later
+)
 
-# 2d. Generate the precise minute-by-minute timeline for all matches
-# Separate the logic for each period to create the correct minute sequences.
+# 2.3: Add period and team names.
+stats_minute_1516_renormalized[minute < 45, period := 1]
+stats_minute_1516_renormalized[minute >= 45, period := 2]
+stats_minute_1516_renormalized <- merge(stats_minute_1516_renormalized, base_match_data, by = "match_id")
 
-# Timeline for Period 1
-timeline_p1 <- match_timings[period == 1, .(minute = 0:end_minute), by = .(
-  match_id,
-  period,
-  home_team_name,
-  away_team_name
-)]
 
-# Timeline for Period 2
-timeline_p2 <- match_timings[period == 2, .(minute = 45:end_minute), by = .(
-  match_id,
-  period,
-  home_team_name,
-  away_team_name
-)]
-
-# Combine the two timelines into one
-stats_minute_1516_renormalized <- rbindlist(list(timeline_p1, timeline_p2))
-# 2e. Initialize all state columns to integer zero (cleaner than NA)
+# 2.5: Initialize all state columns to integer zero.
 state_cols <- c(
   "home_goals", "away_goals", "yellow_cards_home", "red_cards_home",
   "yellow_cards_away", "red_cards_away", "home_goal_now", "away_goal_now",
@@ -262,65 +240,35 @@ state_cols <- c(
 )
 stats_minute_1516_renormalized[, (state_cols) := 0L]
 
-# 2f. Set order for efficient joins and calculations
+# 2.6: Set order for efficient joins and calculations.
 setorder(stats_minute_1516_renormalized, match_id, period, minute)
 
 
-# --- 3. Process and Join Goal Events ---
-# 3a. Filter for goal events
+# --- 3. Process and Join Goal Events (using renormalized data) ---
 goal_events <- all_events_1516_renormalized[shot.outcome.name == "Goal" | type.name == "Own Goal For"]
+goals_per_minute <- goal_events[, .(goal_count = .N), by = .(match_id, period, minute, team.name)]
 
-# 3b. Count goals per minute for each team
-goals_per_minute <- goal_events[,
-  .(goal_count = .N),
-  by = .(match_id, period, minute, team.name)
-]
-
-# 3c. Update the main table with goals scored "now"
-stats_minute_1516_renormalized[goals_per_minute,
-  on = .(match_id, period, minute, home_team_name = team.name),
-  home_goal_now := i.goal_count
-]
-stats_minute_1516_renormalized[goals_per_minute,
-  on = .(match_id, period, minute, away_team_name = team.name),
-  away_goal_now := i.goal_count
-]
+stats_minute_1516_renormalized[goals_per_minute, on = .(match_id, period, minute, home_team_name = team.name), home_goal_now := i.goal_count]
+stats_minute_1516_renormalized[goals_per_minute, on = .(match_id, period, minute, away_team_name = team.name), away_goal_now := i.goal_count]
 
 
-# --- 4. Process and Join Card Events ---
-### CHANGE: We now keep second yellows separate to retain information.
-
-# 4a. Filter for card events
+# --- 4. Process and Join Card Events (using renormalized data) ---
 card_events <- all_events_1516_renormalized[
   (bad_behaviour.card.name %in% c("Yellow Card", "Red Card", "Second Yellow")) |
   (foul_committed.card.name %in% c("Yellow Card", "Red Card", "Second Yellow"))
 ]
-
-# 4b. Consolidate card info into one column and count per type
 card_events[, card_type := fcoalesce(bad_behaviour.card.name, foul_committed.card.name)]
-cards_per_minute <- card_events[,
-  .(
+cards_per_minute <- card_events[, .(
     yellows = sum(card_type == "Yellow Card", na.rm = TRUE),
     second_yellows = sum(card_type == "Second Yellow", na.rm = TRUE),
     reds = sum(card_type == "Red Card", na.rm = TRUE)
-  ),
-  by = .(match_id, period, minute, team.name)
-]
+  ), by = .(match_id, period, minute, team.name)]
 
-# 4c. Update the main table with cards issued "now"
-# A dismissal (player sent off) is a red OR a second yellow.
-stats_minute_1516_renormalized[cards_per_minute,
-  on = .(match_id, period, minute, home_team_name = team.name),
-  `:=`(ych_now = i.yellows, rch_now = i.reds + i.second_yellows)
-]
-stats_minute_1516_renormalized[cards_per_minute,
-  on = .(match_id, period, minute, away_team_name = team.name),
-  `:=`(yca_now = i.yellows, rca_now = i.reds + i.second_yellows)
-]
+stats_minute_1516_renormalized[cards_per_minute, on = .(match_id, period, minute, home_team_name = team.name), `:=`(ych_now = i.yellows, rch_now = i.reds + i.second_yellows)]
+stats_minute_1516_renormalized[cards_per_minute, on = .(match_id, period, minute, away_team_name = team.name), `:=`(yca_now = i.yellows, rca_now = i.reds + i.second_yellows)]
 
 
-# --- 5. Calculate Cumulative Match State ---
-### CHANGE: This logic is the same, but now it's applied to the cleanly generated data.
+# --- 5. Calculate Cumulative Match State (for renormalized data) ---
 stats_minute_1516_renormalized[, `:=`(
   home_goals = shift(cumsum(home_goal_now), fill = 0L),
   away_goals = shift(cumsum(away_goal_now), fill = 0L),
@@ -331,16 +279,13 @@ stats_minute_1516_renormalized[, `:=`(
 ), by = .(match_id)]
 
 
-# --- 6. Final Validation (Good practice) ---
-# Get final state of each match from our new table
-final_state <- stats_minute_1516_renormalized[, .SD[.N], by = match_id]
+# --- 6. Final Validation and Save ---
+# (This validation is still useful to check if total goals match)
+final_state_renorm <- stats_minute_1516_renormalized[, .SD[.N], by = match_id]
+validation_renorm <- matches_info_1516[final_state_renorm, on = "match_id"]
+mismatches_renorm <- validation_renorm[home_score != (home_goals + home_goal_now) | away_score != (away_goals + away_goal_now)]
+print(paste("Found", nrow(mismatches_renorm), "mismatched scores in renormalized data."))
 
-# Compare with original match info
-validation <- matches_info_1516[final_state, on = "match_id"]
-
-# Check for score mismatches (should be 0)
-mismatches <- validation[home_score != (home_goals + home_goal_now) | away_score != (away_goals + away_goal_now)]
-print(paste("Found", nrow(mismatches), "mismatched scores."))
 
 
 #write.csv(stats_minute_1516_renormalized, "stats_minute_1516_renormalized.csv", row.names = FALSE)

@@ -7,11 +7,27 @@ source('soccer-utility_prob_biv.R')
 library(tidyverse) # Keep for potential data exploration, though not used in the main pipeline
 
 
+
 matches_info_1516 <- fread("matches_info_1516.csv")
 dataco_all_events_1516_bivariate_fit <- fread("dataco_all_events_1516_bivariate_fit.csv")
 dataco_all_events_1516_fitprob <- fread("dataco_all_events_1516_fitprob.csv")
 
 
+tolerance <- 0.000001
+
+# percentage
+perc_small_error <- mean(dataco_all_events_1516_bivariate_fit$fit_error <= tolerance, na.rm = TRUE) * 100
+perc_small_error
+
+# filtering
+dataco_all_events_1516_bivariate_fit <- dataco_all_events_1516_bivariate_fit %>%
+  dplyr::filter(!is.na(fit_error) & fit_error <= tolerance)
+
+dataco_all_events_1516_fitprob <- dataco_all_events_1516_fitprob %>%
+  dplyr::filter(match_id %in% dataco_all_events_1516_bivariate_fit$match_id)
+
+matches_info_1516 <- matches_info_1516 %>%
+  dplyr::filter(match_id %in% dataco_all_events_1516_bivariate_fit$match_id)
 # --- 2. Prepare the Data ---
 
 # We need the actual scores from `matches_info`. Let's select only the necessary columns.
@@ -106,3 +122,6 @@ if (aic2 < aic1) {
 } else {
   cat("Conclusion: The Dixon-Coles model provides a better fit.\n")
 }
+
+
+
