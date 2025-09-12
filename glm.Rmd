@@ -116,31 +116,3 @@ cat("\n--- Model Evaluation on Test Data ---\n")
 cat("Log-Loss:", log_loss, "\n")
 cat("Brier Score:", brier_score, "\n")
 
-
-# 5. Create a Calibration Plot
-calibration_data <- test_data %>%
-  # Group predictions into bins (e.g., 0-1%, 1-2%, etc.)
-  mutate(prob_bin = cut(predicted_prob, breaks = seq(0, 0.1, by = 0.01))) %>%
-  group_by(prob_bin) %>%
-  summarise(
-    mean_predicted_prob = mean(predicted_prob),
-    actual_frequency = mean(goal_scored),
-    n = n()
-  ) %>%
-  filter(n > 0)
-
-ggplot(calibration_data, aes(x = mean_predicted_prob, y = actual_frequency)) +
-  geom_point() +
-  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
-  labs(title = "Calibration Plot",
-       x = "Mean Predicted Probability (in bin)",
-       y = "Actual Frequency of Goals") +
-  theme_minimal()
-
-
-
-
-
-
-
-
