@@ -15,6 +15,7 @@ events <- fread("all_events_1516_renormalized.csv")
 statsr <- fread("stats_minute_1516_renormalized.csv")
 stats <- fread("stats_minute_1516.csv")
 
+################### Final Data preparation #########################################################
 #1 Prepare the data. For every minute of the match we want 1) goal home or goal away in that minute? 2) state of the match (current result and players on  the field for both teams).
 
 #Sanity check, no more of one goal per minute
@@ -22,14 +23,14 @@ all(statsr$home_goal_now %in% c(0, 1)) && all(statsr$away_goal_now %in% c(0, 1))
 
 #From the home team perspective
 statsr$score_state <- statsr$home_goals - statsr$away_goals
-statsr$numbers_players_state <- statsr$red_cards_away - statsr$red_cards_home
+statsr$player_advantage_state <- statsr$red_cards_away - statsr$red_cards_home
 
 state_data <- statsr[, c("match_id", 
                      "minute", 
                      "home_goal_now", 
                      "away_goal_now", 
                      "score_state", 
-                     "numbers_players_state")]
+                     "player_advantage_state")]
 
 # 1. From `dataco`, select only the match_id and the pre-match expected goals.
 pre_match_strengths <- dataco[, .(match_id, expH, expA)]
@@ -51,7 +52,7 @@ home_df <- state_data_full[, .(
   goal_scored = home_goal_now,
   # Predictors from the home team's perspective
   score_diff = score_state, # (home_goals - away_goals)
-  player_diff = numbers_players_state, # (away_reds - home_reds)
+  player_diff = player_advantage_state, # (away_reds - home_reds)
   own_expG = expH,
   opponent_expG = expA
 )]
@@ -65,7 +66,7 @@ away_df <- state_data_full[, .(
   goal_scored = away_goal_now,
   # Predictors from the away team's perspective (signs are flipped)
   score_diff = -score_state, # becomes (away_goals - home_goals)
-  player_diff = -numbers_players_state, # becomes (home_reds - away_reds)
+  player_diff = -player_advantage_state, # becomes (home_reds - away_reds)
   own_expG = expA,
   opponent_expG = expH
 )]
@@ -78,51 +79,68 @@ model_data <- rbind(home_df, away_df)
 setorder(model_data, match_id, minute, team)
 
 
-# --- Fit the Binomial GLM ---
-# Now you can fit one single model on this new, clean dataset.
+# --- Create a proper Train/Test Split by Match ---
+# Get a list of all unique match IDs
+all_matches <- unique(model_data$match_id)
+set.seed(42) # for reproducibility
+
+
+# Sample 80% of the match IDs for the training set
+train_match_ids <- sample(all_matches, size = floor(0.85 * length(all_matches)))
+
+# Create the training and testing dataframes
+train_data <- model_data[match_id %in% train_match_ids]
+test_data <- model_data[!match_id %in% train_match_ids]
+
+cat("Training data rows:", nrow(train_data), "\n")
+cat("Testing data rows:", nrow(test_data), "\n")
+
+################ --- Train model and Evaluate the Model. LINEAR GLM ---
+
+# 1. Train your GLM only on the training data
 goal_model <- glm(goal_scored ~ score_diff + player_diff + own_expG + opponent_expG, 
-                  data = model_data, 
+                  data = train_data, 
                   family = binomial(link = "logit"))
 
-# View the model summary to see the results
-summary(goal_model)
+# 2. Make predictions on the unseen test data
+test_data$predicted_prob <- predict(goal_model, newdata = test_data, type = "response")
+
+# 3. Calculate Log-Loss
+log_loss <- -mean(test_data$goal_scored * log(test_data$predicted_prob) + 
+                  (1 - test_data$goal_scored) * log(1 - test_data$predicted_prob))
+
+# 4. Calculate Brier Score
+brier_score <- mean((test_data$predicted_prob - test_data$goal_scored)^2)
+
+cat("\n--- Model Evaluation on Test Data ---\n")
+cat("Log-Loss:", log_loss, "\n")
+cat("Brier Score:", brier_score, "\n")
 
 
-# --- NEW SECTION: Evaluate the model with a single example ---
+# 5. Create a Calibration Plot
+calibration_data <- test_data %>%
+  # Group predictions into bins (e.g., 0-1%, 1-2%, etc.)
+  mutate(prob_bin = cut(predicted_prob, breaks = seq(0, 0.1, by = 0.01))) %>%
+  group_by(prob_bin) %>%
+  summarise(
+    mean_predicted_prob = mean(predicted_prob),
+    actual_frequency = mean(goal_scored),
+    n = n()
+  ) %>%
+  filter(n > 0)
 
-# 1. Define the scenario
-# We create a new data frame with two rows: one for the home team's perspective,
-# and one for the away team's perspective in our chosen scenario.
-# The column names MUST match the ones used to train the model.
-scenario <- data.frame(
-  # Home Team's Perspective
-  score_diff = c(1),  # Winning 2-1, so score difference is +1
-  player_diff = c(0), # No red cards
-  own_expG = c(1.8),
-  opponent_expG = c(1.2),
-  
-  # Away Team's Perspective
-  score_diff = c(-1), # Losing 1-2, so score difference is -1
-  player_diff = c(0), # No red cards
-  own_expG = c(1.2),
-  opponent_expG = c(1.8)
-)
+ggplot(calibration_data, aes(x = mean_predicted_prob, y = actual_frequency)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Calibration Plot",
+       x = "Mean Predicted Probability (in bin)",
+       y = "Actual Frequency of Goals") +
+  theme_minimal()
 
-# 2. Use the model to predict the probabilities
-# The `type = "response"` argument is crucial. It converts the model's raw output
-# (log-odds) into an intuitive probability between 0 and 1.
 
-predicted_probabilities_raw <- predict(goal_model, newdata = scenario, type = "response")
 
-# --- MODIFICATION: Remove the names to prevent the warning ---
-predicted_probabilities <- unname(predicted_probabilities_raw)
 
-# 3. Display the results in a clear format
-results <- data.frame(
-  Team = c("Home", "Away"),
-  Scenario = c("Winning 2-1, 75th min", "Losing 1-2, 75th min"),
-  Probability_of_Scoring_in_this_Minute = predicted_probabilities
-)
 
-cat("\n--- Model Prediction for a Single Scenario ---\n")
-print(results, row.names = FALSE)
+
+
+
