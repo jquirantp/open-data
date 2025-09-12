@@ -15,10 +15,12 @@ events <- fread("all_events_1516_renormalized.csv")
 statsr <- fread("stats_minute_1516_renormalized.csv")
 stats <- fread("stats_minute_1516.csv")
 
-#1 Prepare the data. For every minute of the match we want 1) goal home or goal away in that minute? 2) state of the match (current result and players on  the field for both teams). 
-#point of view of home: + means home team is winning + players means home team has more players on the field
+#1 Prepare the data. For every minute of the match we want 1) goal home or goal away in that minute? 2) state of the match (current result and players on  the field for both teams).
+
+#Sanity check, no more of one goal per minute
 all(statsr$home_goal_now %in% c(0, 1)) && all(statsr$away_goal_now %in% c(0, 1))
 
+#From the home team perspective
 statsr$score_state <- statsr$home_goals - statsr$away_goals
 statsr$numbers_players_state <- statsr$red_cards_away - statsr$red_cards_home
 
@@ -40,3 +42,71 @@ state_data_full <- merge(state_data, pre_match_strengths, by = "match_id")
 # 3. (Optional but recommended) Set the order for readability.
 setorder(state_data_full, match_id, minute)
 
+
+# 1. Create the 'home' perspective dataframe
+home_df <- state_data_full[, .(
+  match_id,
+  minute,
+  team = "home",
+  goal_scored = home_goal_now,
+  # Predictors from the home team's perspective
+  score_diff = score_state, # (home_goals - away_goals)
+  player_diff = numbers_players_state, # (away_reds - home_reds)
+  own_expG = expH,
+  opponent_expG = expA
+)]
+
+
+# 2. Create the 'away' perspective dataframe
+away_df <- state_data_full[, .(
+  match_id,
+  minute,
+  team = "away",
+  goal_scored = away_goal_now,
+  # Predictors from the away team's perspective (signs are flipped)
+  score_diff = -score_state, # becomes (away_goals - home_goals)
+  player_diff = -numbers_players_state, # becomes (home_reds - away_reds)
+  own_expG = expA,
+  opponent_expG = expH
+)]
+
+
+# 3. Combine the two dataframes into one long format
+model_data <- rbind(home_df, away_df)
+
+# 4. Set order for readability
+setorder(model_data, match_id, minute, team)
+
+
+# --- Fit the Binomial GLM ---
+# Now you can fit one single model on this new, clean dataset.
+goal_model <- glm(goal_scored ~ score_diff + player_diff + own_expG + opponent_expG, 
+                  data = model_data, 
+                  family = binomial(link = "logit"))
+
+# View the model summary to see the results
+summary(goal_model)
+
+
+model_data
+# subset minute-by-minute rows for that match/team
+newdata <- model_data[match_id == test_match & team == test_team]
+
+# if model used factors/splines, predict() will handle them if the model contains them
+# 1) per-minute predicted probabilities
+newdata$pred_p <- predict(goal_model, newdata = newdata, type = "response")
+
+# 2) approximate 95% CI for p (on link scale then backtransform)
+lp <- predict(goal_model, newdata = newdata, type = "link", se.fit = TRUE)
+eta <- lp$fit
+se_eta <- lp$se.fit
+lower_eta <- eta - 1.96 * se_eta
+upper_eta <- eta + 1.96 * se_eta
+# inverse-logit (logit link):
+inv_logit <- function(x) plogis(x)
+newdata$p_lo  <- inv_logit(lower_eta)
+newdata$p_hat <- inv_logit(eta)
+newdata$p_hi  <- inv_logit(upper_eta)
+
+# 3) expected goals in the match (sum of per-minute p)
+exp_goals_total <- sum(newdata$pred_p, na.rm = TRUE)
