@@ -7,7 +7,7 @@ library(tidyverse)
 library(plotly)
 
 
-
+#Load the data
 
 matches <- fread("matches_info_1516.csv")
 dataco <- fread("dataco_all_events_1516_fitprob.csv")
@@ -15,51 +15,17 @@ events <- fread("all_events_1516_renormalized.csv")
 statsr <- fread("stats_minute_1516_renormalized.csv")
 stats <- fread("stats_minute_1516.csv")
 
-# RENORMALIZED
-total_goal_counts_r <- statsr %>%
-  group_by(period, minute) %>%
-  summarise(
-    total_goals = sum(home_goal_now) + sum(away_goal_now),
-    .groups = 'drop'
-  ) %>%
-  mutate(type = "RENORMALIZED")
+#1 Prepare the data. For every minute of the match we want 1) goal home or goal away in that minute? 2) state of the match (current result and players on  the field for both teams). 
+#point of view of home: + means home team is winning + players means home team has more players on the field
+all(statsr$home_goal_now %in% c(0, 1)) && all(statsr$away_goal_now %in% c(0, 1))
 
-# NON-RENORMALIZED
-total_goal_counts_nr <- stats %>%
-  group_by(period, minute) %>%
-  summarise(
-    total_goals = sum(home_goal_now) + sum(away_goal_now),
-    .groups = 'drop'
-  ) %>%
-  mutate(type = "NON-RENORMALIZED")
-  
-total_goal_counts <- bind_rows(total_goal_counts_r, total_goal_counts_nr)
+statsr$score_state <- statsr$home_goals - statsr$away_goals
+statsr$numbers_players_state <- statsr$red_cards_away - statsr$red_cards_home
 
+state_data <- statsr[, c("match_id", 
+                     "minute", 
+                     "home_goal_now", 
+                     "away_goal_now", 
+                     "score_state", 
+                     "numbers_players_state")]
 
-# Create a combined label
-total_goal_counts <- total_goal_counts %>%
-  mutate(group = paste0("Period ", period, " - ", type))
-  
-p <- ggplot(total_goal_counts, aes(x = minute, y = total_goals,
-                                   color = interaction(period, type),
-                                   shape = type)) +
-  geom_point(size = 2) +
-  labs(
-    title = "Total Goals vs. Minute",
-    x = "Minute",
-    y = "Total Goals",
-    color = "Period & Type",
-    shape = "Dataset"
-  ) +
-  theme_minimal() +
-  scale_color_manual(
-    values = c(
-      "1.RENORMALIZED" = "blue",
-      "2.RENORMALIZED" = "red",
-      "1.NON-RENORMALIZED" = "darkgreen",
-      "2.NON-RENORMALIZED" = "orange"
-    )
-  ) +
-  scale_shape_manual(values = c("RENORMALIZED" = 16, "NON-RENORMALIZED" = 17))
-
-ggplotly(p)
