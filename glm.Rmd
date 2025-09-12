@@ -88,4 +88,41 @@ goal_model <- glm(goal_scored ~ score_diff + player_diff + own_expG + opponent_e
 summary(goal_model)
 
 
-model_data
+# --- NEW SECTION: Evaluate the model with a single example ---
+
+# 1. Define the scenario
+# We create a new data frame with two rows: one for the home team's perspective,
+# and one for the away team's perspective in our chosen scenario.
+# The column names MUST match the ones used to train the model.
+scenario <- data.frame(
+  # Home Team's Perspective
+  score_diff = c(1),  # Winning 2-1, so score difference is +1
+  player_diff = c(0), # No red cards
+  own_expG = c(1.8),
+  opponent_expG = c(1.2),
+  
+  # Away Team's Perspective
+  score_diff = c(-1), # Losing 1-2, so score difference is -1
+  player_diff = c(0), # No red cards
+  own_expG = c(1.2),
+  opponent_expG = c(1.8)
+)
+
+# 2. Use the model to predict the probabilities
+# The `type = "response"` argument is crucial. It converts the model's raw output
+# (log-odds) into an intuitive probability between 0 and 1.
+
+predicted_probabilities_raw <- predict(goal_model, newdata = scenario, type = "response")
+
+# --- MODIFICATION: Remove the names to prevent the warning ---
+predicted_probabilities <- unname(predicted_probabilities_raw)
+
+# 3. Display the results in a clear format
+results <- data.frame(
+  Team = c("Home", "Away"),
+  Scenario = c("Winning 2-1, 75th min", "Losing 1-2, 75th min"),
+  Probability_of_Scoring_in_this_Minute = predicted_probabilities
+)
+
+cat("\n--- Model Prediction for a Single Scenario ---\n")
+print(results, row.names = FALSE)
