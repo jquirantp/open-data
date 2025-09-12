@@ -3,7 +3,7 @@ library(data.table)
 library(dplyr)
 library(ggplot2)
 library(tidyverse)
-
+library(mgcv)
 library(plotly)
 
 
@@ -79,40 +79,64 @@ model_data <- rbind(home_df, away_df)
 setorder(model_data, match_id, minute, team)
 
 
-# --- Create a proper Train/Test Split by Match ---
+
+
+# --- Create a proper Train/Dev/Test Split by Match ---
 # Get a list of all unique match IDs
 all_matches <- unique(model_data$match_id)
 set.seed(42) # for reproducibility
 
+# Step 1: Split into training (80%) and a temporary set (20%)
+train_match_ids <- sample(all_matches, size = floor(0.8 * length(all_matches)))
+temp_matches <- all_matches[!all_matches %in% train_match_ids]
 
-# Sample 80% of the match IDs for the training set
-train_match_ids <- sample(all_matches, size = floor(0.85 * length(all_matches)))
+# Step 2: Split the temporary set into validation (10%) and test (10%)
+dev_match_ids <- sample(temp_matches, size = floor(0.5 * length(temp_matches)))
+test_match_ids <- temp_matches[!temp_matches %in% dev_match_ids]
 
-# Create the training and testing dataframes
+# Create the final dataframes
 train_data <- model_data[match_id %in% train_match_ids]
-test_data <- model_data[!match_id %in% train_match_ids]
+dev_data <- model_data[match_id %in% dev_match_ids]
+test_data <- model_data[match_id %in% test_match_ids]
 
-cat("Training data rows:", nrow(train_data), "\n")
-cat("Testing data rows:", nrow(test_data), "\n")
 
-################ --- Train model and Evaluate the Model. LINEAR GLM ---
+################ ---  m1 Train model and Evaluate the Model. LINEAR GLM ---
 
 # 1. Train your GLM only on the training data
-goal_model <- glm(goal_scored ~ score_diff + player_diff + own_expG + opponent_expG, 
-                  data = train_data, 
-                  family = binomial(link = "logit"))
+goal_model_m1<- glm(goal_scored ~ score_diff + player_diff + own_expG + opponent_expG, 
+              data = train_data, family = binomial)
 
 # 2. Make predictions on the unseen test data
-test_data$predicted_prob <- predict(goal_model, newdata = test_data, type = "response")
+dev_data$predicted_prob_m1 <- predict(goal_model_m1, newdata = dev_data, type = "response")
 
-# 3. Calculate Log-Loss
-log_loss <- -mean(test_data$goal_scored * log(test_data$predicted_prob) + 
-                  (1 - test_data$goal_scored) * log(1 - test_data$predicted_prob))
-
+# 3. Calculate Log-Loss (with clipping for numerical stability)
+eps <- 1e-15 # A small epsilon to prevent log(0)
+clipped_probs <- pmin(pmax(dev_data$predicted_prob_m1, eps), 1 - eps)
+log_loss_m1 <- -mean(dev_data$goal_scored * log(clipped_probs) + 
+                  (1 - dev_data$goal_scored) * log(1 - clipped_probs))
 # 4. Calculate Brier Score
-brier_score <- mean((test_data$predicted_prob - test_data$goal_scored)^2)
+brier_score_m1 <- mean((dev_data$predicted_prob_m1 - dev_data$goal_scored)^2)
 
-cat("\n--- Model Evaluation on Test Data ---\n")
-cat("Log-Loss:", log_loss, "\n")
-cat("Brier Score:", brier_score, "\n")
+cat("\n--- Model Evaluation on Test Data GLM---\n")
+cat("Log-Loss:", log_loss_m1, "\n")
+cat("Brier Score:", brier_score_m1, "\n")
 
+
+################ --- Train model and Evaluate the Model. GAM Add Spline on Minute ---
+goal_model_m2<- gam(goal_scored ~ s(minute) + score_diff + player_diff + own_expG + opponent_expG,
+                     data = train_data, family = binomial)
+   
+# 2. Make predictions on the unseen test data
+dev_data$predicted_prob_m2 <- predict(goal_model_m2, newdata = dev_data, type = "response")
+
+# 3. Calculate Log-Loss (with clipping for numerical stability)
+eps <- 1e-15 # A small epsilon to prevent log(0)
+clipped_probs <- pmin(pmax(dev_data$predicted_prob_m2, eps), 1 - eps)
+log_loss_m2 <- -mean(dev_data$goal_scored * log(clipped_probs) + 
+                  (1 - dev_data$goal_scored) * log(1 - clipped_probs))
+# 4. Calculate Brier Score
+brier_score_m2 <- mean((dev_data$predicted_prob_m2 - dev_data$goal_scored)^2)
+
+cat("\n--- Model Evaluation on Test Data GAM ---\n")
+cat("Log-Loss:", log_loss_m2, "\n")
+cat("Brier Score:", brier_score_m2, "\n")
