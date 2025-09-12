@@ -29,3 +29,14 @@ state_data <- statsr[, c("match_id",
                      "score_state", 
                      "numbers_players_state")]
 
+# 1. From `dataco`, select only the match_id and the pre-match expected goals.
+pre_match_strengths <- dataco[, .(match_id, expH, expA)]
+
+# 2. Merge these strengths into your state_data dataframe.
+# The `merge` function will use the common column `match_id` to align the data correctly.
+# It will automatically repeat the expH and expA values for every minute of each match.
+state_data_full <- merge(state_data, pre_match_strengths, by = "match_id")
+
+# 3. (Optional but recommended) Set the order for readability.
+setorder(state_data_full, match_id, minute)
+
